@@ -7,8 +7,11 @@ from scipy.interpolate import splev, splprep
 SMOOTH_SIGMA = 0.015  # m, assumed per-point noise std at ~0.94 m point spacing (scaled with spacing)
 
 
+TELEPORT_JUMP_M = 6.0  # max legit motion is ~71 m/s * 0.05 s = 3.6 m per tick
+
+
 def _wrap(a):
-    return (a + np.pi) % (2 * np.pi) - np.pi
+    return np.pi - (np.pi - a) % (2 * np.pi)  # (-pi, pi]
 
 
 class Track:
@@ -60,23 +63,21 @@ class Track:
 class Progress:
     """Unwrapped distance since (re)start, with teleport relocalization."""
 
-    JUMP = 20.0
-
     def __init__(self, track: Track):
         self.track = track
         self._last_p = None
         self._idx = None
         self._s_prev = 0.0
-        self._start_s = 0.0
+        self.start_s = 0.0
         self._total = 0.0
 
     def update(self, p, yaw):
         tr = self.track
         p = np.asarray(p, dtype=float)[:2]
-        fresh = self._last_p is None or np.hypot(*(p - self._last_p)) > self.JUMP
+        fresh = self._last_p is None or np.hypot(*(p - self._last_p)) > TELEPORT_JUMP_M
         idx, s, e_y = tr.project(p, None if fresh else self._idx)
         if fresh:
-            self._start_s, self._s_prev, self._total = s, s, 0.0
+            self.start_s, self._s_prev, self._total = s, s, 0.0
         else:
             ds = _wrap((s - self._s_prev) * 2 * np.pi / tr.length) * tr.length / (2 * np.pi)
             self._total += ds
