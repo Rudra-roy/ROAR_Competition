@@ -52,7 +52,17 @@ def summarise(run_csv, p):
     jumps = np.flatnonzero(np.diff(d["s_total"]) < -50)  # respawn at the start
     idx = sec_index(sections(p), d["line_s"])
     t_sec = np.bincount(idx, minlength=len(p["a_lat_sections"])) * DT
-    return dict(max_ey=float(np.abs(d["e_y"]).max()), ey_at=float(d["line_s"][np.argmax(np.abs(d["e_y"]))]),
+    # car offset from the centreline (walls ~4.15-4.7 m for the car centre; the line itself is within 4.0)
+    sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tools")]
+    from export_line import offsets
+    from track import Track
+    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    ls = d["line_s"][::2]
+    psi = np.interp(ls, tr.s, np.unwrap(tr.psi), period=tr.length)
+    xy = np.c_[np.interp(ls, tr.s, tr.xy[:, 0], period=tr.length), np.interp(ls, tr.s, tr.xy[:, 1], period=tr.length)]
+    xy += d["e_y"][::2, None] * np.c_[-np.sin(psi), np.cos(psi)]
+    dc = np.abs(offsets(xy, np.load(os.path.join(DATA, "centreline.npy")))[0])
+    return dict(max_dc=float(dc.max()), dc_at=float(ls[np.argmax(dc)]),max_ey=float(np.abs(d["e_y"]).max()), ey_at=float(d["line_s"][np.argmax(np.abs(d["e_y"]))]),
                 vmax=float(d["v"].max()), crashes=[round(float(d["line_s"][j]), 1) for j in jumps],
                 t_sec=t_sec, t_total=len(d) * DT)
 
@@ -96,9 +106,9 @@ def main():
         run_csv = os.path.join(ROOT, "logs", "%s_%d.run.csv" % (label, i))
         shutil.copy(os.path.join(ROOT, "logs", "run.csv"), run_csv)
         m = summarise(run_csv, p)
-        line = ("%s run %d [%s]: %s sim=%s coll=%s | max|e_y| %.2f @ %.0f, vmax %.1f, crashes at %s | "
+        line = ("%s run %d [%s]: %s sim=%s coll=%s | max|e_y| %.2f @ %.0f, max|d_centre| %.2f @ %.0f, vmax %.1f, crashes at %s | "
                 "sec time %s (pred %s)" % (label, i, row[0], row[5], row[3] or "NA", row[4], m["max_ey"],
-                                           m["ey_at"], m["vmax"], m["crashes"], np.round(m["t_sec"], 1).tolist(),
+                                           m["ey_at"], m["max_dc"], m["dc_at"], m["vmax"], m["crashes"], np.round(m["t_sec"], 1).tolist(),
                                            np.round(tsec_p, 1).tolist()))
         print(out.splitlines()[-1] if out else "", "\n" + line, flush=True)
         with open(os.path.join(ROOT, "logs", "tune_summary.txt"), "a") as f:
