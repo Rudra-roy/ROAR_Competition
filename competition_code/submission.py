@@ -82,7 +82,9 @@ class RoarCompetitionSolution:
         # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (run 1 fit:
         # 0.003-0.005 rad per m/s^2), so its velocity points outward. The MPC's e_y' = v*e_psi model assumes no
         # slip: track the course instead by asking for yaw = line heading + beta.
-        e_psi -= self.veh.p["sideslip_k"] * v * v * self._kappa_ref(s_total)
+        # Clipped to the grip limit: over speed at corner entry v^2*kappa would ask for a huge heading offset.
+        a_lat = self._a_lat(s_total)
+        e_psi -= self.veh.p["sideslip_k"] * float(np.clip(v * v * self._kappa_ref(s_total), -a_lat, a_lat))
         if self.tick == 0:
             L = self.track.length
             d = (self.progress.start_s - self.profile_start_s + L / 2) % L - L / 2

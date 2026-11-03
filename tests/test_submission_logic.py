@@ -44,3 +44,19 @@ def test_respawn_resets_progress():
     assert abs(row["s_total"]) < 1.0
     assert abs(row["v_ref"] - sol.v_ref(0.0)) < 0.5
     assert np.isfinite(car.control["steer"])
+
+
+def test_sideslip_feedforward_bounded_by_grip():
+    loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
+    sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
+    asyncio.run(sol.initialize())
+    tr = sol.track
+    i = int(np.argmax(np.abs(tr.kappa)))  # tightest corner, far over speed: v^2*kappa >> a_lat
+    loc.val = np.r_[tr.xy[i], 0.0]
+    rpy.val = np.array([0.0, 0.0, tr.psi[i]])
+    vel.val = 80.0 * np.r_[np.cos(tr.psi[i]), np.sin(tr.psi[i]), 0.0]
+    asyncio.run(sol.step())
+    row = sol.last
+    assert 80.0 ** 2 * abs(row["kappa_ref"]) > 2 * sol.veh.a_lat(row["line_s"])
+    assert abs(row["e_psi"]) <= sol.veh.p["sideslip_k"] * sol.veh.a_lat(row["line_s"]) + 0.02
+    assert np.isfinite(car.control["steer"])
