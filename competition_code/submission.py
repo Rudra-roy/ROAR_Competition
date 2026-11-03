@@ -19,10 +19,6 @@ LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
 LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
             "steer", "throttle", "brake", "ok")
 START_S_TOL_M = 5.0
-# Above this speed the heading fed to the MPC is the course (velocity direction), not the yaw: at 35-60 m/s the
-# CARLA car's sideslip (yaw - course) swings +-0.03 rad, the yaw error barely correlates with how e_y actually
-# moves (run 1: r = 0.17 at 35-48 m/s), and the MPC's e_y' = v*e_psi model then drives a weave into the walls.
-COURSE_MIN_V = 5.0
 
 
 class RoarCompetitionSolution:
@@ -76,15 +72,13 @@ class RoarCompetitionSolution:
     async def step(self) -> None:
         p = np.asarray(self.location_sensor.get_last_gym_observation(), dtype=float)
         yaw = float(self.rpy_sensor.get_last_gym_observation()[2])
-        vel = np.asarray(self.velocity_sensor.get_last_gym_observation(), dtype=float)
-        v = float(np.linalg.norm(vel))
-        heading = float(np.arctan2(vel[1], vel[0])) if v > COURSE_MIN_V else yaw
+        v = float(np.linalg.norm(self.velocity_sensor.get_last_gym_observation()))
         # Same teleport test as Progress: a respawn restarts progress, so forget the MPC's state too.
         if self._p_prev is not None and np.hypot(*(p[:2] - self._p_prev)) > TELEPORT_JUMP_M:
             self.mpc.reset()
             self.u_prev = (0.0, 0.0)
         self._p_prev = p[:2]
-        s_total, e_y, e_psi, _ = self.progress.update(p, heading)
+        s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
         if self.tick == 0:
             L = self.track.length
             d = (self.progress.start_s - self.profile_start_s + L / 2) % L - L / 2
