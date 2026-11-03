@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import export_line
+from track import Track
 
 R = os.path.join(os.path.dirname(__file__), "..", "..", "ref", "roar2026", "competition_code")
 REF = os.path.join(R, "WaypointLine.py")
@@ -15,17 +16,19 @@ CENTRE = os.path.join(os.path.dirname(__file__), "..", "competition_code", "data
 def data(tmp_path_factory):
     if not (os.path.exists(REF) and os.path.exists(PRIM)):
         pytest.skip("reference files not found: %s, %s" % (REF, PRIM))
-    out = str(tmp_path_factory.mktemp("l") / "line.npz")
-    base = str(tmp_path_factory.mktemp("b") / "base.npz")
-    export_line.main(REF, PRIM, out, centre=CENTRE if os.path.exists(CENTRE) else None)
-    export_line.main(REF, PRIM, base)
+    d = tmp_path_factory.mktemp("l")
+    centre = CENTRE if os.path.exists(CENTRE) else None
+    export_line.main(REF, PRIM, str(d / "line.npz"), centre=centre)
+    export_line.main(REF, PRIM, str(d / "base.npz"))
+    export_line.main(REF, PRIM, str(d / "nok.npz"), centre=centre, kinks=False)
     raw = export_line.parse_literal(REF)
     prim = export_line.clean_primary(export_line.load_primary(PRIM))[0]
-    return np.load(out)["xy"], raw, export_line.widen(raw), prim, np.load(base)["xy"]
+    xy, base, nok = (np.load(str(d / f))["xy"] for f in ("line.npz", "base.npz", "nok.npz"))
+    return xy, raw, export_line.widen(raw), prim, base, nok
 
 
 def test_shape_and_widening(data):
-    xy, raw, wid, _, base = data
+    xy, raw, wid, _, base, _ = data
     assert xy.shape[1] == 2 and 5900 < len(xy) < 6000 and xy.dtype == np.float64
     assert np.array_equal(base[:5701], wid[:5701])
     still = np.all(xy[:5701] == base[:5701], axis=1)  # identical wherever the wall-margin shift is 0
@@ -42,7 +45,7 @@ def test_closed_loop(data):
 
 
 def test_bridge_follows_primary(data):
-    xy, prim = data[0][5701:], data[3]
+    xy, prim = data[5][5701:], data[3]  # before the kink pass (which may leave the primary path)
     seg = np.vstack([prim, prim[:1]])  # cleaned primary, closed
     a, b = seg[:-1], np.diff(seg, axis=0)
     for p in xy:
@@ -72,7 +75,7 @@ def test_wall_margin(data):
 def test_margin_only_moves_near_violations(data):
     if not os.path.exists(CENTRE):
         pytest.skip("centreline.npy absent")
-    xy, base = data[0], data[4]
+    xy, base = data[5], data[4]  # margin pass only
     d0, _ = export_line.offsets(base, np.load(CENTRE))
     step = np.linalg.norm(np.roll(base, -1, axis=0) - base, axis=1)
     arc = np.cumsum(step) - step
@@ -82,3 +85,32 @@ def test_margin_only_moves_near_violations(data):
     sel = far & (np.abs(d0) < 3.0)
     assert sel.any()
     assert np.linalg.norm(xy - base, axis=1)[sel].max() < 0.01
+
+
+def _kinks(xy):
+    return np.abs(export_line.kink_metric(Track(xy)))
+
+
+def test_kinks_removed(data):
+    if not os.path.exists(CENTRE):
+        pytest.skip("centreline.npy absent")
+    xy, nok = data[0], data[5]
+    assert _kinks(nok).max() > 2 * export_line.KINK_THR  # the line had kinks (41.5 /km at line_s ~5511)
+    assert _kinks(xy).max() < export_line.KINK_THR
+
+
+def test_kink_pass_local(data):
+    if not os.path.exists(CENTRE):
+        pytest.skip("centreline.npy absent")
+    xy, nok = data[0], data[5]
+    assert xy.shape == nok.shape
+    moved = np.linalg.norm(xy - nok, axis=1) > 0
+    assert moved.any() and moved.mean() < 0.1
+    tr = Track(nok)
+    step = np.linalg.norm(np.roll(nok, -1, axis=0) - nok, axis=1)
+    arc = np.cumsum(step) - step
+    hit = np.array([arc[np.argmin(np.linalg.norm(nok - p, axis=1))] for p in tr.xy[_kinks(nok) > export_line.KINK_THR]])
+    gap = np.abs(arc[moved][:, None] - hit[None, :])
+    assert np.minimum(gap, step.sum() - gap).min(axis=1).max() <= export_line.KINK_HALF + 1.0  # only near kinks
+    for i in (0, 1, 5700, 5701, len(xy) - 1):  # endpoints and the bridge seam unchanged
+        assert np.array_equal(xy[i], nok[i])

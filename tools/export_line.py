@@ -1,10 +1,20 @@
 """Export the widened reference racing line. Parses the ref file as data (ast); never imports it."""
 import ast
 import math
+import os
 import sys
 
 import numpy as np
 from scipy.interpolate import splev, splprep
+from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import lsq_linear
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "competition_code"))
+from track import Track  # noqa: E402  (our own runtime geometry: kinks are measured on the kappa the car uses)
+
+KINK_SIGMA = 3.0  # m, kink = kappa minus its Gaussian(sigma) smooth; corners ramp over >= ~10 m and stay below
+KINK_THR = 5e-3  # 1/m: the clean line peaks at 3.3 /km, the kinks at 6.6-41.5 /km (Task 8d step 0)
+KINK_HALF = 30.0  # m, half-width of the re-smoothed window around each kink
 
 SPECS = [(1313, 1393, 0.9), (1393, 1473, -0.9), (883, 963, -0.5), (963, 1043, 0.5),
          (4036, 4116, 0.5), (4116, 4196, -0.5), (1688, 1768, 0.3), (1768, 1848, -0.3)]
@@ -145,12 +155,60 @@ def wall_margin(xy, centre, max_offset=4.0):
     return new
 
 
-def main(ref, prim_path, out, cut=5700, centre=None, max_offset=4.0):
+def kink_metric(tr, sigma=KINK_SIGMA):
+    """kappa minus its circular Gaussian smooth (1/m) on Track samples: large only at short spikes or steps."""
+    return tr.kappa - gaussian_filter1d(tr.kappa, sigma / tr.ds, mode="wrap")
+
+
+def smooth_kinks(xy, centre, max_offset=4.0, thr=KINK_THR, half=KINK_HALF, iters=6, slack=0.02):
+    """Lateral-shift-only elastic smoothing: in a +-half window around each kink, offsets d along the line normal
+    minimise sum((delta kappa)^2) with kappa ~ kappa0 + d'' (linearised, iterated), d = 0 on the window's two end
+    points each side (position and heading kept) and |d_centre| <= max_offset - slack. Points outside are untouched."""
+    xy0, xy = xy, xy.copy()
+    n = len(xy)
+    tr = Track(xy)
+    k_before = np.abs(kink_metric(tr)).max()
+    step = np.linalg.norm(np.roll(xy, -1, axis=0) - xy, axis=1)
+    arc, L = np.r_[0, np.cumsum(step)[:-1]], step.sum()
+    hit = [arc[np.argmin(np.linalg.norm(xy - p, axis=1))] for p in tr.xy[np.abs(kink_metric(tr)) > thr]]
+    if not hit:
+        return xy
+    gap = np.abs(arc[:, None] - np.array(hit)[None, :])
+    idx = np.flatnonzero(np.minimum(gap, L - gap).min(axis=1) <= half)
+    wins = np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+    if len(wins) > 1 and wins[0][0] == 0 and wins[-1][-1] == n - 1:  # window across the seam
+        wins = [np.r_[wins[-1], wins[0]]] + wins[1:-1]
+    for _ in range(iters):
+        tr = Track(xy)
+        for w in wins:
+            m, h = len(w), step[w[:-1]].mean()
+            s = np.unwrap(np.array([tr.project(xy[i])[1] for i in w]) * 2 * np.pi / tr.length) * tr.length / (2 * np.pi)
+            k0 = np.interp(s % tr.length, tr.s, tr.kappa, period=tr.length)
+            psi = np.interp(s % tr.length, tr.s, np.unwrap(tr.psi), period=tr.length)
+            D2 = np.zeros((m, m - 4))  # kappa change at each window point from the free offsets d_2..d_{m-3}
+            for j in range(m - 4):
+                D2[j + 1:j + 4, j] = np.array([1.0, -2.0, 1.0]) / (h * h)
+            D1 = np.diff(np.eye(m), axis=0)
+            dc = offsets(xy[w[2:-2]], centre)[0]
+            lim = max_offset - slack
+            d = lsq_linear(D1 @ D2, -D1 @ k0, bounds=(np.minimum(-lim - dc, 0), np.maximum(lim - dc, 0))).x
+            xy[w[2:-2]] += np.c_[-np.sin(psi), np.cos(psi)][2:-2] * d[:, None]
+    sh = np.linalg.norm(xy - xy0, axis=1)
+    print("kink pass: %d kink samples, before/after max|kink| %.1f/%.1f /km; windows (arc m: max shift m): %s" % (
+        len(hit), 1e3 * k_before, 1e3 * np.abs(kink_metric(Track(xy))).max(),
+        ", ".join("%.0f-%.0f: %.2f" % (arc[w[0]], arc[w[-1]], sh[w].max()) for w in wins)))
+    return xy
+
+
+def main(ref, prim_path, out, cut=5700, centre=None, max_offset=4.0, kinks=True):
     line = widen(parse_literal(ref))
     prim = load_primary(prim_path)
     xy = np.vstack([line[:cut + 1], bridge(line, prim, cut)])
     if centre is not None:
-        xy = wall_margin(xy, np.load(centre, allow_pickle=False), max_offset)
+        c = np.load(centre, allow_pickle=False)
+        xy = wall_margin(xy, c, max_offset)
+        if kinks:  # after the margin pass (bounded by the same wall offset), so the rest of the line stays bit-identical
+            xy = smooth_kinks(xy, c, max_offset)
     np.savez(out, xy=xy)
 
 
@@ -162,5 +220,6 @@ if __name__ == "__main__":
     ap.add_argument("out")
     ap.add_argument("--centre")
     ap.add_argument("--max-offset", type=float, default=4.0)
+    ap.add_argument("--no-kinks", action="store_true", help="skip the curvature-kink pass")
     a = ap.parse_args()
-    main(a.ref, a.primary, a.out, centre=a.centre, max_offset=a.max_offset)
+    main(a.ref, a.primary, a.out, centre=a.centre, max_offset=a.max_offset, kinks=not a.no_kinks)
