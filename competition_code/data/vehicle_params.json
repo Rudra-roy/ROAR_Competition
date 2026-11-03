@@ -333,5 +333,6 @@
       "rms": 0.296
     }
   },
-  "brake_ellipse_c": 1.0
+  "brake_ellipse_c": 1.0,
+  "course_heading": 1.0
 }
