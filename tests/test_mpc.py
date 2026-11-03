@@ -254,3 +254,22 @@ def test_options_deterministic_and_fast():
     assert np.array_equal(c1, c2)
     print("median solve %.2f ms, max %.2f ms" % (1e3 * np.median(times), 1e3 * max(times)))
     assert np.median(times) < 0.02
+
+
+def test_a_lat_margin_scales_lateral_limit():
+    """On a circle at the grip limit, 0.5 m outside: the margin lets the MPC turn tighter instead of braking."""
+    v = 40.0
+    kc = V.a_lat_max / v ** 2
+    out = {}
+    for m in (1.0, 1.1):
+        mpc = FrenetMPC(V, dict(CFG, a_lat_margin=m))
+        raw = capture(mpc)
+        k, a, ok = mpc.solve(-0.5, 0.0, v, 0.0, lambda s: kc, lambda s: v, (kc, 0.0))
+        assert ok
+        _, us = horizon(mpc, raw[-1])
+        xs, _ = horizon(mpc, raw[-1])
+        assert (np.abs(us[:, 0]) <= m * V.a_lat_max / np.maximum(xs[:-1, 2], 10.0) ** 2 * 1.01 + 1e-4).all()
+        assert abs(k) <= m * V.a_lat_max / (v + DT * 0.0) ** 2 + 1e-6
+        out[m] = (k, a)
+    assert out[1.1][0] > 1.03 * kc  # uses the headroom
+    assert out[1.1][1] > out[1.0][1]  # and brakes less

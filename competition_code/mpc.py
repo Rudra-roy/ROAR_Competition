@@ -19,7 +19,8 @@ convex, so every tangent is an inner bound, and it couples v and kappa: slowing 
 Options (cfg keys, absent = off): a_tau_s replaces brake_tau_s as the longitudinal lag; jerk_max bounds
 |a_k - a_{k-1}| <= jerk_max*dt (a_{-1} = u_prev); ellipse adds the friction-ellipse facets of tools/build_profile.py,
 (a/A_brk)^2 + (v^2 kappa/(c a_lat))^2 <= 1 while braking, as tangent lines at 30/60 deg with v^2 at v_k (c =
-brake_ellipse_c): -cos(t) a/A_brk +- sin(t) v_k^2 kappa/(c a_lat) <= 1 (loose for a > 0).
+brake_ellipse_c): -cos(t) a/A_brk +- sin(t) v_k^2 kappa/(c a_lat) <= 1 (loose for a > 0); a_lat_margin scales
+a_lat(s) for every MPC grip row (the profile sits at a_lat, so without headroom any correction curvature needs braking).
 Decision vector z = [x_0..x_N, u_0..u_{N-1}, sig_1..sig_N]. P is constant; A keeps a fixed sparsity and only
 its v-dependent entries are rewritten each solve.
 """
@@ -46,6 +47,7 @@ class FrenetMPC:
         self.c = c = dt / cfg.get("a_tau_s", veh.p["brake_tau_s"])
         self.ck = ck = min(dt / veh.p["steer_tau_s"], 1.0) if veh.p["steer_tau_s"] > 0 else 1.0
         self.a_min = -veh.a_brake * veh.brake_scale
+        self.a_lat_margin = float(cfg.get("a_lat_margin", 1.0))
         self.k_lin = 0.5 * c / dt  # 1/(2 tau): damping ~0.7 with the lag, for the first-call linearisation
         self.nx, nu = nx, nu = NX * (N + 1), NU * N
         self.nz = nz = nx + nu + N
@@ -178,7 +180,7 @@ class FrenetMPC:
                 ak += self.c * (ac - ak)
         kr = np.array([kappa_ref_fn(x) for x in s[:N]], float)
         vr = np.array([v_ref_fn(x) for x in s[1:]], float)
-        al = np.array([a_lat_fn(x) for x in s[:N]], float)
+        al = self.a_lat_margin * np.array([a_lat_fn(x) for x in s[:N]], float)
         if not all(np.isfinite(a).all() for a in (x0, vl, kr, vr, al)):
             return self._fallback(x0, kr[0], vr[0], al[0])  # never let a NaN into the solver
         ks = np.array([veh.K(x) for x in vl[:N]])
