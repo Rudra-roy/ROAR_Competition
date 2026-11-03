@@ -93,11 +93,74 @@ def bridge(line, prim, cut=5700, step=1.0, kmax=0.08, ctx=20):
     return np.column_stack(splev(uu, tck))
 
 
-def main(ref, prim_path, out, cut=5700):
+def offsets(xy, centre):
+    """Signed lateral offset (left +) of each point from the closed centreline polyline.
+    Returns (d, foot) with foot the nearest point on the polyline."""
+    a, b = centre, np.roll(centre, -1, axis=0)
+    e = b - a
+    ee = np.maximum((e * e).sum(1), 1e-12)
+    d = np.empty(len(xy))
+    foot = np.empty_like(xy)
+    for i, p in enumerate(xy):  # ponytail: O(N*M) scan (~17M ops), fine offline
+        t = np.clip(((p - a) * e).sum(1) / ee, 0, 1)
+        f = a + t[:, None] * e
+        j = int(np.argmin(((f - p) ** 2).sum(1)))
+        foot[i] = f[j]
+        d[i] = np.sign(e[j, 0] * (p[1] - f[j, 1]) - e[j, 1] * (p[0] - f[j, 0])) * np.linalg.norm(p - f[j])
+    return d, foot
+
+
+def wall_margin(xy, centre, max_offset=4.0):
+    """Shift points toward the centreline by a Gaussian-smoothed (sigma 15 m) excess so |d| <= max_offset."""
+    d0, _ = offsets(xy, centre)
+    excess = np.maximum(0, np.abs(d0) - max_offset)
+    print("wall margin: %d violating points, max|d| before %.3f" % ((excess > 0).sum(), np.abs(d0).max()))
+    if not excess.any():
+        return xy
+    ds = np.linalg.norm(np.roll(xy, -1, axis=0) - xy, axis=1)
+    sig = 15.0 / ds.mean()
+    h = int(4 * sig)
+    k = np.exp(-0.5 * (np.arange(-h, h + 1) / sig) ** 2)
+    k /= k.sum()
+    sm = np.convolve(np.r_[excess[-h:], excess, excess[:h]], k, mode="valid")  # circular
+    f = 1.0
+    for _ in range(20):
+        foot = offsets(xy, centre)[1]
+        dirn = foot - xy
+        dirn /= np.maximum(np.linalg.norm(dirn, axis=1, keepdims=True), 1e-9)
+        new = xy + dirn * (f * sm)[:, None]
+        dn, _ = offsets(new, centre)
+        if np.abs(dn).max() <= max_offset + 1e-9:
+            break
+        f *= 1.1
+    else:
+        raise RuntimeError("wall margin did not converge")
+    sh = np.linalg.norm(new - xy, axis=1)
+    arc = np.r_[0, np.cumsum(ds)[:-1]]
+    mv = np.where(sh > 1e-6)[0]
+    runs = np.split(mv, np.where(np.diff(mv) > 1)[0] + 1)
+    print("  max|d| after %.3f, max shift %.3f m (scale %.2f), moved s-ranges: %s" % (
+        np.abs(dn).max(), sh.max(), f,
+        ", ".join("%.0f-%.0f" % (arc[r[0]], arc[r[-1]]) for r in runs if len(r))))
+    return new
+
+
+def main(ref, prim_path, out, cut=5700, centre=None, max_offset=4.0):
     line = widen(parse_literal(ref))
     prim = load_primary(prim_path)
-    np.savez(out, xy=np.vstack([line[:cut + 1], bridge(line, prim, cut)]))
+    xy = np.vstack([line[:cut + 1], bridge(line, prim, cut)])
+    if centre is not None:
+        xy = wall_margin(xy, np.load(centre, allow_pickle=False), max_offset)
+    np.savez(out, xy=xy)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("ref")
+    ap.add_argument("primary")
+    ap.add_argument("out")
+    ap.add_argument("--centre")
+    ap.add_argument("--max-offset", type=float, default=4.0)
+    a = ap.parse_args()
+    main(a.ref, a.primary, a.out, centre=a.centre, max_offset=a.max_offset)
