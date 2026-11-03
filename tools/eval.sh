@@ -20,7 +20,7 @@ for i in $(seq 1 "$RUNS"); do
   LOG="$REPO/logs/${LABEL}_${i}"
   "$PARENT/run_monza.sh" > "$LOG.server.log" 2>&1 &
   status=server_hang
-  for _ in $(seq 120); do port_open && { status=up; break; }; sleep 1; done
+  for _ in $(seq 300); do port_open && { status=up; break; }; sleep 1; done
   sim=""; coll=0
   if [ "$status" = up ]; then
     sleep 5
