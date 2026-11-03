@@ -14,6 +14,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECTION_WP = [2611, 322, 557, 739, 1158, 1317, 1516, 1881, 1944, 2359]
 SECTION_MU = [3.05, 2.97, 3.35, 3.36, 3.14, 2.98, 3.30, 2.85, 2.98, 2.10]
 BRAKE_SETTLE = 11  # ticks of brake=1 (incl. this one) before a sample counts
+LIMITER_TICKS, LIMITER_ACC = 40, 0.3  # top speed reached: mean accel < 0.3 over >= 2 s of full throttle
+V_MAX_CAP = 75.0
+BRAKE_WIN = (3, 16)  # brake-response fit window: ticks before / after each brake onset
 KNOBS = {
     "speed_scale": 0.85,
     "brake_scale": 1.0,
@@ -81,6 +84,56 @@ def fit_steer_gain(v, steer, yaw_rate, bin_w=5.0, min_count=20):
     return vs, ks
 
 
+def fit_k_smooth(vs, ks):
+    """K(v) = k0 / (1 + c v^2)  <=>  1/K = 1/k0 + (c/k0) v^2, both coefficients kept >= 0."""
+    from scipy.optimize import nnls
+    vs, ks = np.asarray(vs), np.asarray(ks)
+    (icpt, slope), _ = nnls(np.c_[np.ones_like(vs), vs ** 2], 1.0 / ks)
+    icpt = max(icpt, 1e-6)  # ponytail: K->inf at v=0 if the data say so; never hit with real bins
+    return float(1.0 / icpt), float(slope / icpt)
+
+
+def fit_brake_response(t, v, thr, brk):
+    """Dead time + first-order lag of decel after each brake onset (forward differences, interval midpoints)."""
+    a = np.diff(v) / np.diff(t)
+    pre, post = BRAKE_WIN
+    ts, ys, grp = [], [], []
+    for k0 in np.where((brk[1:] == 1) & (brk[:-1] == 0))[0] + 1:
+        if k0 < pre or k0 + post >= len(a) or v[k0] < 20 or not (brk[k0:k0 + post + 1] == 1).all():
+            continue
+        ks = np.arange(k0 - pre, k0 + post + 1)
+        ts.append((ks - k0 + 0.5) * (t[1] - t[0]))
+        ys.append(a[ks])
+        grp.append(np.full(len(ks), len(grp)))
+    if not ts:
+        return None, None
+    ts, ys, grp = np.concatenate(ts), np.concatenate(ys), np.concatenate(grp)
+    onehot = (grp[:, None] == np.arange(grp.max() + 1)).astype(float)  # per-onset pre-brake level
+    best = (np.inf, None, None)
+    for delay in np.arange(0.0, 0.3001, 0.005):
+        for tau in np.arange(0.02, 0.8001, 0.005):
+            g = 1 - np.exp(-np.clip(ts - delay, 0, None) / tau)
+            X = np.c_[onehot * (1 - g)[:, None], g]  # a = a0_j (1-g) + a_inf g
+            r = ys - X @ np.linalg.lstsq(X, ys, rcond=None)[0]
+            if r @ r < best[0]:
+                best = (r @ r, float(delay), float(tau))
+    return round(best[1], 3), round(best[2], 3)
+
+
+def v_max_estimate(t, v, thr, brk, acc, lines):
+    """Observed max if the car sat on the limiter, else the root of a_drive (capped)."""
+    full = ((thr == 1) & (brk == 0)).astype(float)
+    n = LIMITER_TICKS
+    if len(v) >= n:
+        cnt = np.convolve(full, np.ones(n), "valid")
+        mean_acc = np.convolve(acc * full, np.ones(n), "valid") / n
+        near_top = np.convolve(v < 0.9 * v.max(), np.ones(n), "valid") == 0  # not e.g. stuck on a wall
+        if ((cnt == n) & (mean_acc < LIMITER_ACC) & near_top).any():
+            return float(v.max()), "limiter"
+    roots = [np.sqrt(al / be) for al, be in lines if be > 0 and al > 0]
+    return float(min(roots + [V_MAX_CAP])), "a_drive_root"
+
+
 def fit(log):
     t, v = log["t"], log["v"]
     thr, brk, steer = log["throttle"], log["brake"], log["steer"]
@@ -90,12 +143,21 @@ def fit(log):
     on = np.convolve(brk == 1, np.ones(BRAKE_SETTLE), "full")[:len(v)] == BRAKE_SETTLE
     hard = _steady(on) & (v > 30)
     gv, gk = fit_steer_gain(v, steer, log["yaw_rate"])
+    k0, c = fit_k_smooth(gv, gk)
+    lines = fit_a_drive(v[full], acc[full])
+    v_max, v_src = v_max_estimate(t, v, thr, brk, acc, lines)
+    delay, tau = fit_brake_response(t, v, thr, brk)
     return {
-        "a_drive_lines": fit_a_drive(v[full], acc[full]),
+        "a_drive_lines": lines,
         "a_brake": float(np.percentile(-acc[hard], 10)),
-        "v_max": float(v.max()),
+        "brake_delay_s": delay,
+        "brake_tau_s": tau,
+        "v_max": v_max,
+        "v_max_source": v_src,
         "steer_gain_v": gv,
         "steer_gain_k": gk,
+        "steer_gain_k0": k0,
+        "steer_gain_c": c,
     }
 
 

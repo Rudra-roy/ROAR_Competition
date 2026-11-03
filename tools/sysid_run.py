@@ -1,6 +1,6 @@
 """One sysid lap through the official runner; logs every tick to logs/sysid.csv.
 
-Run with the sim server up: python tools/sysid_run.py  (any cwd). Exits via os._exit(0) after one lap,
+Run with the sim server up: python tools/sysid_run.py  (any cwd). Exits via os._exit(0) after one lap or at the first collision,
 which leaves the server hung -- kill it afterwards (wineserver -k).
 """
 import asyncio
@@ -22,10 +22,9 @@ from track import Progress, Track  # noqa: E402
 
 DT = 0.05
 K_PP = 2.4           # steer per unit path curvature (~wheelbase 2.9 m / 70 deg max wheel angle)
-KAPPA_STRAIGHT = 0.004
-LOOK_M = 250.0
-A_LAT_CORNER = 12.0  # m/s^2 -> corner speed sqrt(a/kappa), capped at V_CORNER
-V_CORNER = 25.0
+A_LAT = 12.0         # m/s^2 -> corner speed sqrt(A_LAT/|kappa|)
+V_CAP = 80.0
+A_DECEL_PLAN = 10.0  # m/s^2 used for the backward braking pass (measured ~16)
 
 
 def _wrap(a):
@@ -40,14 +39,18 @@ class SysIdSolution:
         self.location_sensor = location_sensor
         self.velocity_sensor = velocity_sensor
         self.rpy_sensor = rpy_sensor
+        self.collision_sensor = collision_sensor
 
     async def initialize(self):
         os.makedirs(LOGS, exist_ok=True)
         np.save(os.path.join(LOGS, "maneuverable_waypoints.npy"), np.array([w.location for w in self.wps]))
         self.track = tr = Track(np.load(os.path.join(REPO, "competition_code", "data", "racing_line.npz"))["xy"])
         self.progress = Progress(tr)
-        ak, n = np.abs(tr.kappa), int(LOOK_M / tr.ds)
-        self.kmax_ahead = np.max([np.roll(ak, -i) for i in range(n + 1)], axis=0)
+        vl = np.minimum(V_CAP, np.sqrt(A_LAT / np.maximum(np.abs(tr.kappa), 1e-9)))
+        m = len(vl)
+        for i in range(2 * m - 1, -1, -1):  # backward braking pass, twice round the loop for the wrap
+            vl[i % m] = min(vl[i % m], np.sqrt(vl[(i + 1) % m] ** 2 + 2 * A_DECEL_PLAN * tr.ds))
+        self.v_lim = vl
         self.f = open(os.path.join(LOGS, "sysid.csv"), "w")
         self.f.write("t,x,y,yaw,v,throttle,brake,steer,yaw_rate\n")
         self.tick, self.prev_yaw, self.vmax = 0, None, 0.0
@@ -57,29 +60,26 @@ class SysIdSolution:
         p = self.location_sensor.get_last_gym_observation()
         yaw = float(self.rpy_sensor.get_last_gym_observation()[2])
         v = float(np.linalg.norm(self.velocity_sensor.get_last_gym_observation()))
-        s_total, _, _, idx = self.progress.update(p, yaw)
+        hit = np.linalg.norm(self.collision_sensor.get_last_observation().impulse_normal) > 100.0
+        jump = self.tick > 0 and np.hypot(*(p[:2] - self.prev_p)) > 6.0
+        if hit or jump:  # stop at the first collision; nothing after it is logged
+            self._finish(f"COLLISION at tick {self.tick}: hit={hit} jump={jump}")
+        s_total, e_y, _, idx = self.progress.update(p, yaw)
         if s_total >= tr.length:
-            self.f.close()
-            print(f"SYSID lap done: ticks={self.tick} sim={self.tick * DT:.2f}s vmax={self.vmax:.2f}", flush=True)
-            os._exit(0)
+            self._finish("lap done")
 
         # pure pursuit; positive steer turns RIGHT, so left curvature -> negative steer
-        d = tr.xy[(idx + int(round(max(15.0, 0.5 * v) / tr.ds))) % len(tr.s)] - p[:2]
+        d = tr.xy[(idx + int(round(max(8.0, 0.3 * v) / tr.ds))) % len(tr.s)] - p[:2]
         curv = 2.0 * np.sin(_wrap(np.arctan2(d[1], d[0]) - yaw)) / max(np.hypot(*d), 1e-3)
-        steer = -K_PP * curv
+        steer = float(np.clip(-K_PP * curv, -1.0, 1.0))
 
-        km = self.kmax_ahead[idx]
-        if km < KAPPA_STRAIGHT:
+        vl = self.v_lim[idx]
+        if v <= vl - 0.5:
             thr, brk = 1.0, 0.0
-            if v < 40.0:
-                steer += 0.05 if (self.tick * DT) % 1.0 < 0.5 else -0.05
+        elif v > vl + 1.0:
+            thr, brk = 0.0, 1.0
         else:
-            vc = min(V_CORNER, np.sqrt(A_LAT_CORNER / km))
-            if v > vc + 1.0:
-                thr, brk = 0.0, 1.0
-            else:
-                thr, brk = float(np.clip(0.3 + 0.3 * (vc - v), 0.0, 1.0)), 0.0
-        steer = float(np.clip(steer, -1.0, 1.0))
+            thr, brk = float(np.clip(0.3 + 0.3 * (vl - v), 0.0, 1.0)), 0.0
         await self.vehicle.apply_action({"throttle": thr, "steer": steer, "brake": brk,
                                          "hand_brake": 0.0, "reverse": 0, "target_gear": 0})
 
@@ -87,9 +87,15 @@ class SysIdSolution:
         self.f.write(f"{self.tick * DT:.2f},{p[0]:.3f},{p[1]:.3f},{yaw:.5f},{v:.4f},"
                      f"{thr:.3f},{brk:.3f},{steer:.4f},{yr:.5f}\n")
         if self.tick % 200 == 0:
-            print(f"SYSID t={self.tick * DT:.1f} s_total={s_total:.0f} v={v:.1f} km={km:.4f}", flush=True)
-        self.prev_yaw, self.vmax = yaw, max(self.vmax, v)
+            print(f"SYSID t={self.tick * DT:.1f} s_total={s_total:.0f} v={v:.1f} v_lim={vl:.1f} e_y={e_y:+.2f}",
+                  flush=True)
+        self.prev_yaw, self.prev_p, self.vmax = yaw, p[:2].copy(), max(self.vmax, v)
         self.tick += 1
+
+    def _finish(self, why):
+        self.f.close()
+        print(f"SYSID {why}: ticks={self.tick} sim={self.tick * DT:.2f}s vmax={self.vmax:.2f}", flush=True)
+        os._exit(0)
 
 
 competition_runner.RoarCompetitionSolution = SysIdSolution
