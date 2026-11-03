@@ -1,24 +1,25 @@
-"""
-Competition instructions:
-Please do not change anything else but fill out the to-do sections.
+"""Hybrid submission: offline TOPP-RA speed profile + LTV Frenet MPC tracking a fixed racing line.
+
+step(): localize on the line (Progress) -> FrenetMPC (curvature, accel) -> steer / pedal maps.
 """
 
-from typing import List, Tuple, Dict, Optional
-import roar_py_interface
+import os
+from typing import List
+
 import numpy as np
+import roar_py_interface
 
-def normalize_rad(rad : float):
-    return (rad + np.pi) % (2 * np.pi) - np.pi
+from mpc import FrenetMPC
+from track import TELEPORT_JUMP_M, Progress, Track
+from vehicle import Vehicle, load_profile
 
-def filter_waypoints(location : np.ndarray, current_idx: int, waypoints : List[roar_py_interface.RoarPyWaypoint]) -> int:
-    def dist_to_waypoint(waypoint : roar_py_interface.RoarPyWaypoint):
-        return np.linalg.norm(
-            location[:2] - waypoint.location[:2]
-        )
-    for i in range(current_idx, len(waypoints) + current_idx):
-        if dist_to_waypoint(waypoints[i%len(waypoints)]) < 3:
-            return i % len(waypoints)
-    return current_idx
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(HERE, "data")
+LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
+LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
+            "steer", "throttle", "brake", "ok")
+START_S_TOL_M = 5.0
+
 
 class RoarCompetitionSolution:
     def __init__(
@@ -40,72 +41,70 @@ class RoarCompetitionSolution:
         self.rpy_sensor = rpy_sensor
         self.occupancy_map_sensor = occupancy_map_sensor
         self.collision_sensor = collision_sensor
-    
+
     async def initialize(self) -> None:
-        # TODO: You can do some initial computation here if you want to.
-        # For example, you can compute the path to the first waypoint.
+        self.track = tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+        self.veh = veh = Vehicle.from_json(os.path.join(DATA, "vehicle_params.json"))
+        self.progress = Progress(tr)
+        self.mpc = FrenetMPC(veh, veh.p["mpc"])
+        prof = os.path.join(DATA, "speed_profile.npz")
+        self.v_ref = load_profile(prof, speed_scale=veh.p["speed_scale"])
+        self.profile_start_s = float(np.load(prof)["start_s"])
+        # The profile starts from rest at v = 0: with the car stopped the whole MPC horizon sits at s = 0 and
+        # v_ref = 0, so it would never pull away. A small floor gets it rolling onto the profile.
+        v_min = veh.p["v_ref_min"]
+        self._v_ref_mpc = lambda s: max(self.v_ref(s), v_min)
+        self._kappa_ref = lambda s: float(np.interp(self._line_s(s), tr.s, tr.kappa, period=tr.length))
+        self._a_lat = lambda s: veh.a_lat(self._line_s(s))
+        self.u_prev = (0.0, 0.0)
+        self.tick = 0
+        self._p_prev = None
+        self.last = None
+        self._log = None
+        if os.environ.get("ROAR_LOG") == "1":
+            os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+            self._log = open(LOG_PATH, "w", buffering=1)
+            self._log.write(",".join(LOG_COLS) + "\n")
 
-        # Receive location, rotation and velocity data 
-        vehicle_location = self.location_sensor.get_last_gym_observation()
-        vehicle_rotation = self.rpy_sensor.get_last_gym_observation()
-        vehicle_velocity = self.velocity_sensor.get_last_gym_observation()
+    def _line_s(self, s_total):
+        return (self.progress.start_s + s_total) % self.track.length
 
-        self.current_waypoint_idx = 10
-        self.current_waypoint_idx = filter_waypoints(
-            vehicle_location,
-            self.current_waypoint_idx,
-            self.maneuverable_waypoints
-        )
+    async def step(self) -> None:
+        p = np.asarray(self.location_sensor.get_last_gym_observation(), dtype=float)
+        yaw = float(self.rpy_sensor.get_last_gym_observation()[2])
+        v = float(np.linalg.norm(self.velocity_sensor.get_last_gym_observation()))
+        # Same teleport test as Progress: a respawn restarts progress, so forget the MPC's state too.
+        if self._p_prev is not None and np.hypot(*(p[:2] - self._p_prev)) > TELEPORT_JUMP_M:
+            self.mpc.reset()
+            self.u_prev = (0.0, 0.0)
+        self._p_prev = p[:2]
+        s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
+        if self.tick == 0:
+            L = self.track.length
+            d = (self.progress.start_s - self.profile_start_s + L / 2) % L - L / 2
+            if abs(d) > START_S_TOL_M:
+                print(f"WARNING: start_s {self.progress.start_s:.1f} is {d:+.1f} m from the profile's "
+                      f"{self.profile_start_s:.1f}: v_ref is offset along the line")
 
-
-    async def step(
-        self
-    ) -> None:
-        """
-        This function is called every world step.
-        Note: You should not call receive_observation() on any sensor here, instead use get_last_observation() to get the last received observation.
-        You can do whatever you want here, including apply_action() to the vehicle.
-        """
-        # TODO: Implement your solution here.
-
-        # Receive location, rotation and velocity data 
-        vehicle_location = self.location_sensor.get_last_gym_observation()
-        vehicle_rotation = self.rpy_sensor.get_last_gym_observation()
-        vehicle_velocity = self.velocity_sensor.get_last_gym_observation()
-        vehicle_velocity_norm = np.linalg.norm(vehicle_velocity)
-        
-        # Find the waypoint closest to the vehicle
-        self.current_waypoint_idx = filter_waypoints(
-            vehicle_location,
-            self.current_waypoint_idx,
-            self.maneuverable_waypoints
-        )
-         # We use the 3rd waypoint ahead of the current waypoint as the target waypoint
-        waypoint_to_follow = self.maneuverable_waypoints[(self.current_waypoint_idx + 3) % len(self.maneuverable_waypoints)]
-
-        # Calculate delta vector towards the target waypoint
-        vector_to_waypoint = (waypoint_to_follow.location - vehicle_location)[:2]
-        heading_to_waypoint = np.arctan2(vector_to_waypoint[1],vector_to_waypoint[0])
-
-        # Calculate delta angle towards the target waypoint
-        delta_heading = normalize_rad(heading_to_waypoint - vehicle_rotation[2])
-
-        # Proportional controller to steer the vehicle towards the target waypoint
-        steer_control = (
-            -8.0 / np.sqrt(vehicle_velocity_norm) * delta_heading / np.pi
-        ) if vehicle_velocity_norm > 1e-2 else -np.sign(delta_heading)
-        steer_control = np.clip(steer_control, -1.0, 1.0)
-
-        # Proportional controller to control the vehicle's speed towards 40 m/s
-        throttle_control = 0.05 * (20 - vehicle_velocity_norm)
-
+        kappa, a, ok = self.mpc.solve(e_y, e_psi, v, s_total, self._kappa_ref, self._v_ref_mpc, self.u_prev,
+                                      self._a_lat)
+        self.u_prev = (kappa, a)
+        steer = self.veh.steer_for(kappa, v)
+        throttle, brake = self.veh.pedals_for(a, v)
         control = {
-            "throttle": np.clip(throttle_control, 0.0, 1.0),
-            "steer": steer_control,
-            "brake": np.clip(-throttle_control, 0.0, 1.0),
+            "throttle": throttle,
+            "steer": steer,
+            "brake": brake,
             "hand_brake": 0.0,
             "reverse": 0,
-            "target_gear": 0
+            "target_gear": 0,
         }
         await self.vehicle.apply_action(control)
+
+        self.last = dict(tick=self.tick, s_total=s_total, line_s=self._line_s(s_total), e_y=e_y, e_psi=e_psi, v=v,
+                         v_ref=self.v_ref(s_total), kappa_ref=self._kappa_ref(s_total), kappa_cmd=kappa, a_cmd=a,
+                         steer=steer, throttle=throttle, brake=brake, ok=int(ok))
+        if self._log:
+            self._log.write(",".join(f"{self.last[c]:.6g}" for c in LOG_COLS) + "\n")
+        self.tick += 1
         return control
