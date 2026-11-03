@@ -143,13 +143,13 @@ def fit(log):
     on = np.convolve(brk == 1, np.ones(BRAKE_SETTLE), "full")[:len(v)] == BRAKE_SETTLE
     hard = _steady(on) & (v > 30)
     gv, gk = fit_steer_gain(v, steer, log["yaw_rate"])
-    k0, c = fit_k_smooth(gv, gk)
+    k0, c = fit_k_smooth(gv, gk) if len(gv) >= 2 else (None, None)
     lines = fit_a_drive(v[full], acc[full])
     v_max, v_src = v_max_estimate(t, v, thr, brk, acc, lines)
     delay, tau = fit_brake_response(t, v, thr, brk)
     return {
         "a_drive_lines": lines,
-        "a_brake": float(np.percentile(-acc[hard], 10)),
+        "a_brake": float(np.percentile(-acc[hard], 10)) if hard.any() else None,
         "brake_delay_s": delay,
         "brake_tau_s": tau,
         "v_max": v_max,

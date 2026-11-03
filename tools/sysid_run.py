@@ -21,10 +21,19 @@ import competition_runner  # noqa: E402
 from track import Progress, Track  # noqa: E402
 
 DT = 0.05
-K_PP = 2.4           # steer per unit path curvature (~wheelbase 2.9 m / 70 deg max wheel angle)
+LOOKAHEAD_KMH = [(90, 18.0), (110, 22.0), (130, 28.0), (160, 36.0), (180, 44.0), (200, 52.0),
+                 (250, 60.0), (300, 70.0)]  # (speed bound km/h, lookahead m), winners' table
+LOOKAHEAD_ELSE = 16.0
+WHEELBASE_PP = 4.7
+STEER_MUL = 1.5
 A_LAT = 12.0         # m/s^2 -> corner speed sqrt(A_LAT/|kappa|)
 V_CAP = 80.0
 A_DECEL_PLAN = 10.0  # m/s^2 used for the backward braking pass (measured ~16)
+
+
+def lookahead_m(v):
+    kmh = v * 3.6
+    return next((L for bound, L in LOOKAHEAD_KMH if kmh < bound), LOOKAHEAD_ELSE)
 
 
 def _wrap(a):
@@ -68,10 +77,11 @@ class SysIdSolution:
         if s_total >= tr.length:
             self._finish("lap done")
 
-        # pure pursuit; positive steer turns RIGHT, so left curvature -> negative steer
-        d = tr.xy[(idx + int(round(max(8.0, 0.3 * v) / tr.ds))) % len(tr.s)] - p[:2]
-        curv = 2.0 * np.sin(_wrap(np.arctan2(d[1], d[0]) - yaw)) / max(np.hypot(*d), 1e-3)
-        steer = float(np.clip(-K_PP * curv, -1.0, 1.0))
+        # winners' pure pursuit; alpha > 0 = target to the right -> positive steer = right
+        L = lookahead_m(v)
+        tx, ty = tr.xy[(idx + int(round(L / tr.ds))) % len(tr.s)]
+        alpha = _wrap(yaw - np.arctan2(ty - p[1], tx - p[0]))
+        steer = float(np.clip(STEER_MUL * np.arctan(2 * WHEELBASE_PP * np.sin(alpha) / L), -1.0, 1.0))
 
         vl = self.v_lim[idx]
         if v <= vl - 0.5:
@@ -86,8 +96,8 @@ class SysIdSolution:
         yr = 0.0 if self.prev_yaw is None else _wrap(yaw - self.prev_yaw) / DT
         self.f.write(f"{self.tick * DT:.2f},{p[0]:.3f},{p[1]:.3f},{yaw:.5f},{v:.4f},"
                      f"{thr:.3f},{brk:.3f},{steer:.4f},{yr:.5f}\n")
-        if self.tick % 200 == 0:
-            print(f"SYSID t={self.tick * DT:.1f} s_total={s_total:.0f} v={v:.1f} v_lim={vl:.1f} e_y={e_y:+.2f}",
+        if self.tick % 200 == 0 or self.tick < 3:
+            print(f"SYSID t={self.tick * DT:.1f} s_total={s_total:.0f} v={v:.1f} v_lim={vl:.1f} e_y={e_y:+.2f} alpha={alpha:+.3f} steer={steer:+.3f}",
                   flush=True)
         self.prev_yaw, self.prev_p, self.vmax = yaw, p[:2].copy(), max(self.vmax, v)
         self.tick += 1
