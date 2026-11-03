@@ -1,10 +1,11 @@
 """Tuning driver: edit vehicle_params.json -> rebuild profile -> commit -> tools/eval.sh -> summarise.
 
-  python tools/tune.py <label> <runs> [speed_scale=0.9] [brake_scale=1.1] [sec7=30.1] [--dry]
+  python tools/tune.py <label> <runs> [speed_scale=0.9] [brake_scale=1.1] [sec7=30.1] [--dry] [--keep-going]
 
 secN=value sets a_lat_sections[N]. A profile rebuild runs when brake_scale or a section changes. Each run is a
 separate `eval.sh 1 <label>` with ROAR_LOG=1; its run.csv is kept as logs/<label>_<i>.run.csv and summarised
 (max|e_y|, top speed, crash line_s, per-section sim time vs predicted). --dry edits + rebuilds + predicts only.
+Stops after the first unclean run unless --keep-going.
 """
 import csv
 import json
@@ -68,8 +69,8 @@ def summarise(run_csv, p):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--dry"]
-    dry = "--dry" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    dry, keep_going = "--dry" in sys.argv, "--keep-going" in sys.argv
     label, runs, sets = args[0], int(args[1]), args[2:]
     with open(PARAMS) as f:
         p = json.load(f)
@@ -113,6 +114,8 @@ def main():
         print(out.splitlines()[-1] if out else "", "\n" + line, flush=True)
         with open(os.path.join(ROOT, "logs", "tune_summary.txt"), "a") as f:
             f.write(line + "\n")
+        if (row[5] != "finished" or row[4] != "0") and not keep_going:
+            break  # step already failed: the next run would not change the verdict
 
 
 if __name__ == "__main__":
