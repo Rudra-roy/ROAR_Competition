@@ -100,10 +100,19 @@ def main():
             % (label, " ".join(sets)))
     env = dict(os.environ, ROAR_LOG="1")
     for i in range(1, runs + 1):
-        out = subprocess.run([os.path.join(ROOT, "tools", "eval.sh"), "1", label], env=env, capture_output=True,
-                             text=True).stdout.strip()
-        with open(os.path.join(ROOT, "results.csv")) as f:
-            row = list(csv.reader(f))[-1]
+        for _ in range(2):  # one retry when the sim server hangs (client never connects): not a car result
+            if os.path.exists(os.path.join(ROOT, "logs", "run.csv")):
+                os.remove(os.path.join(ROOT, "logs", "run.csv"))
+            out = subprocess.run([os.path.join(ROOT, "tools", "eval.sh"), "1", label], env=env, capture_output=True,
+                                 text=True).stdout.strip()
+            with open(os.path.join(ROOT, "results.csv")) as f:
+                row = list(csv.reader(f))[-1]
+            if row[5] not in ("crashed_client", "server_hang"):
+                break
+            print("infra failure (%s), retrying" % row[5], flush=True)
+        if not os.path.exists(os.path.join(ROOT, "logs", "run.csv")):
+            print("%s run %d: %s, no run.csv" % (label, i, row[5]), flush=True)
+            break
         run_csv = os.path.join(ROOT, "logs", "%s_%d.run.csv" % (label, i))
         shutil.copy(os.path.join(ROOT, "logs", "run.csv"), run_csv)
         m = summarise(run_csv, p)
