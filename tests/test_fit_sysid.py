@@ -81,3 +81,40 @@ def test_v_max_from_a_drive_root_without_limiter():
     keep = log["v"] < 50.0  # never near top speed (~69.3 m/s); t keeps its gaps
     p = fit({k: x[keep] for k, x in log.items()})
     assert abs(p["v_max"] - np.sqrt(12.0 / 0.0025)) <= 0.05 * 69.3, p["v_max"]
+
+
+def test_envelope_captures_top_speed_drop():
+    """Real car: ~4 m/s^2 line plus a steep collapse above ~69 m/s (zero near 71.3); runs stop near 70.9."""
+    envelope = lambda v: np.minimum(4.0 - 0.0005 * v ** 2, 30.0 - 0.0059 * v ** 2)
+    true = lambda v: envelope(v) - 0.4 * np.exp(-((v - 22.0) / 3.0) ** 2)  # plus a gear-shift dip
+    rng = np.random.default_rng(1)
+    v, rows = 0.0, []
+    for top in (63.0, 67.0, 70.9):  # like the real log: only one run-up reaches the top
+        while v < top:
+            rows.append((v, 1.0, 0.0))
+            v += (true(v) + rng.normal(0, 0.2)) * DT
+        for i in range(60):
+            rows.append((v, 0.0, 1.0))
+            v = max(0.0, v + (brake_a(i) + rng.normal(0, 0.2)) * DT)
+    r = np.array(rows)
+    z = np.zeros(len(r))
+    p = fit(dict(t=np.arange(len(r)) * DT, v=r[:, 0], throttle=r[:, 1], brake=r[:, 2], steer=z, yaw_rate=z))
+    assert 2 <= len(p["a_drive_lines"]) <= 4
+    for vv in (10.0, 40.0, 60.0):
+        assert abs(a_drive(p, vv) - envelope(vv)) <= 0.05 * envelope(vv), (vv, a_drive(p, vv), envelope(vv))
+    assert a_drive(p, 70.9) <= 0.7, a_drive(p, 70.9)
+    assert abs(p["v_max"] - np.sqrt(30.0 / 0.0059)) <= 0.7, p["v_max"]  # never on the limiter -> envelope root
+
+
+def test_load_pools_csvs_and_cuts_at_teleport(tmp_path):
+    from fit_sysid import load
+    cols = "t,x,y,yaw,v,throttle,brake,steer,yaw_rate"
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    rows_a = [f"{i * DT},{i * 1.0},0,0,{i},1,0,0,0" for i in range(30)] + ["1.5,500,0,0,0,1,0,0,0"]  # teleport
+    a.write_text(cols + "\n" + "\n".join(rows_a) + "\n")
+    b.write_text(cols + "\n" + "\n".join(f"{i * DT},{i * 1.0},0,0,5,1,0,0,0" for i in range(10)) + "\n")
+    log = load([str(a), str(b)])
+    assert len(log["v"]) == 10 + 10  # a: cut 1 s (20 ticks) before the jump at row 30
+    assert np.all(np.diff(log["t"]) > 0)
+    for i in (0, 9, 10, 19):  # file edges are masked out of every throttle/brake fit
+        assert log["throttle"][i] == -1 and log["brake"][i] == -1
