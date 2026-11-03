@@ -16,6 +16,10 @@ Constraints: |kappa_k| <= K(v_k) (steering), a_min <= a_k <= a_drive(v_k), and t
 |kappa| <= a_lat/v^2 as its tangent at v_t = max(v_k, V_TAN_MIN): +-kappa + (2a/v_t^3) v <= 3a/v_t^2. a/v^2 is
 convex, so every tangent is an inner bound, and it couples v and kappa: slowing down buys curvature.
 |e_y| <= ey_max is soft with an L1 exact penalty (plus a small quadratic term).
+Options (cfg keys, absent = off): a_tau_s replaces brake_tau_s as the longitudinal lag; jerk_max bounds
+|a_k - a_{k-1}| <= jerk_max*dt (a_{-1} = u_prev); ellipse adds the friction-ellipse facets of tools/build_profile.py,
+(a/A_brk)^2 + (v^2 kappa/(c a_lat))^2 <= 1 while braking, as tangent lines at 30/60 deg with v^2 at v_k (c =
+brake_ellipse_c): -cos(t) a/A_brk +- sin(t) v_k^2 kappa/(c a_lat) <= 1 (loose for a > 0).
 Decision vector z = [x_0..x_N, u_0..u_{N-1}, sig_1..sig_N]. P is constant; A keeps a fixed sparsity and only
 its v-dependent entries are rewritten each solve.
 """
@@ -27,6 +31,7 @@ import scipy.sparse as sp
 
 NX, NU = 5, 2
 SLACK_L1, SLACK_L2 = 1e4, 10.0
+ELLIPSE_DEG = (30.0, 60.0)  # 0 deg = the a_min box, 90 deg ~ the lateral tangent rows
 # Typical magnitudes of [e_y, e_psi, v, a_act] and [kappa, a_cmd]: the QP is solved in z' = z / mag with rows
 # divided by their own magnitude, so OSQP's inf-norm tolerances mean the same thing for kappa (~0.01) as for v.
 MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0, 0.01), (0.01, 5.0)
@@ -38,7 +43,7 @@ class FrenetMPC:
     def __init__(self, veh, cfg):
         self.veh = veh
         self.N, self.dt = N, dt = int(cfg["N"]), float(cfg["dt"])
-        self.c = c = dt / veh.p["brake_tau_s"]
+        self.c = c = dt / cfg.get("a_tau_s", veh.p["brake_tau_s"])
         self.ck = ck = min(dt / veh.p["steer_tau_s"], 1.0) if veh.p["steer_tau_s"] > 0 else 1.0
         self.a_min = -veh.a_brake * veh.brake_scale
         self.k_lin = 0.5 * c / dt  # 1/(2 tau): damping ~0.7 with the lag, for the first-call linearisation
@@ -87,16 +92,36 @@ class FrenetMPC:
             add(ro + 2 * k, NX * (k + 1), 1.0), add(ro + 2 * k, isg + k, -1.0)
             add(ro + 2 * k + 1, NX * (k + 1), 1.0), add(ro + 2 * k + 1, isg + k, 1.0)
             add(ro + 2 * N + k, isg + k, 1.0)
-        self.m = m = ro + 3 * N
+        self.rj = rj = ro + 3 * N
+        self.jerk = cfg.get("jerk_max")
+        nj = N - 1 if self.jerk else 0
+        for k in range(nj):  # a_{k+1} - a_k (k = 0 vs u_prev is folded into the input box)
+            add(rj + k, iu + NU * (k + 1) + 1, 1.0), add(rj + k, iu + NU * k + 1, -1.0)
+        self.re = re = rj + nj
+        th = np.radians(ELLIPSE_DEG) if cfg.get("ellipse") else np.zeros(0)
+        self.e_sin = np.sin(th) / veh.p.get("brake_ellipse_c", 1.0)
+        eidx = []
+        for k in range(N if len(th) else 0):
+            for j, t in enumerate(th):
+                for sgn in (0, 1):
+                    r = re + 2 * len(th) * k + 2 * j + sgn
+                    add(r, iu + NU * k + 1, -math.cos(t) / -self.a_min)
+                    eidx.append(add(r, iu + NU * k, 0.0))
+        ne = 2 * len(th) * N
+        self.m = m = re + ne
         self.sz = sz = np.r_[np.tile(MAG_X, N + 1), np.tile(MAG_U, N), np.ones(N)]
-        self.sr = sr = np.r_[np.tile(MAG_X, N + 1), np.tile(MAG_U, N), np.full(2 * N, MAG_U[0]), np.ones(3 * N)]
+        self.sr = sr = np.r_[np.tile(MAG_X, N + 1), np.tile(MAG_U, N), np.full(2 * N, MAG_U[0]), np.ones(3 * N),
+                             np.full(nj, MAG_U[1]), np.ones(ne)]
         self.sc = sz[cols] / sr[rows]  # per-entry scale of A' = diag(1/sr) A diag(sz)
         self.vals, self.vidx, self.lidx = np.array(vals), np.array(vidx).reshape(N, 2), np.array(lidx).reshape(N, 2)
+        self.eidx = np.array(eidx, int).reshape(N, len(th), 2)
+        self.e_sgn = np.array([1.0, -1.0])
         A = sp.csc_matrix((np.arange(1.0, len(vals) + 1), (rows, cols)), shape=(m, nz))
         A.sort_indices()
         self.perm = A.data.astype(int) - 1  # CSC slot -> COO entry
         self.vals[self.vidx] = -dt * 30.0  # real values at a nominal speed: OSQP's scaling is fixed at setup
         self.vals[self.lidx] = 2 * veh.a_lat_max / 30.0 ** 3
+        self._set_ellipse(np.full(N, 30.0), np.full(N, veh.a_lat_max))
         A.data = (self.vals * self.sc)[self.perm]
         P = sp.diags(sz) @ P @ sp.diags(sz)
         self.l, self.u = np.zeros(m), np.zeros(m)
@@ -104,7 +129,9 @@ class FrenetMPC:
         self.l[rl:ro] = -np.inf
         self.l[ro:ro + 2 * N:2], self.u[ro:ro + 2 * N:2] = -np.inf, ey_max
         self.l[ro + 1:ro + 2 * N:2], self.u[ro + 1:ro + 2 * N:2] = -ey_max, np.inf
-        self.u[ro + 2 * N:] = np.inf
+        self.u[ro + 2 * N:rj] = np.inf
+        self.l[rj:re], self.u[rj:re] = -(self.jerk or 0) * dt, (self.jerk or 0) * dt
+        self.l[re:], self.u[re:] = -np.inf, 1.0
         self.q = np.zeros(nz)
         self.q[isg:] = SLACK_L1
 
@@ -160,6 +187,7 @@ class FrenetMPC:
 
         self.vals[self.vidx] = -dt * vl[:N, None]
         self.vals[self.lidx] = (2 * al / vt ** 3)[:, None]
+        self._set_ellipse(vl[:N], al)
         q = self.q
         q[NX + 2:nx:NX] = -2 * self.q_v * vr
         q[iu:iu + NU] = -2 * self.r * (k_prev, a_prev)
@@ -168,6 +196,9 @@ class FrenetMPC:
         l[NX + 1:nx:NX] = u[NX + 1:nx:NX] = -dt * vl[:N] * kr
         l[nx:rl:2], u[nx:rl:2] = -ks, ks
         l[nx + 1:rl:2], u[nx + 1:rl:2] = self.a_min, ad
+        if self.jerk:  # a_0 within jerk_max*dt of the command being applied now (empty -> keep the box's upper end)
+            u[nx + 1] = min(ad[0], a_prev + self.jerk * dt)
+            l[nx + 1] = min(max(self.a_min, a_prev - self.jerk * dt), u[nx + 1])
         u[rl:rl + 2 * N] = np.repeat(3 * al / vt ** 2, 2)
         self.solver.update(Ax=(self.vals * self.sc)[self.perm], q=q * self.sz, l=l / self.sr, u=u / self.sr)
         z = self._run()
@@ -176,8 +207,13 @@ class FrenetMPC:
         self._v_pred = z[2:nx:NX].copy()
         km0 = min(ks[0], al[0] / max(x0[2], 1.0) ** 2)
         kappa = float(np.clip(z[iu], -km0, km0))
-        a = float(np.clip(z[iu + 1], self.a_min, ad[0]))
+        a = float(np.clip(z[iu + 1], l[nx + 1], u[nx + 1]))
         return kappa, a, True
+
+    def _set_ellipse(self, v, a_lat):
+        """kappa coefficients of the ellipse facets: +-sin(t)/c * v^2/a_lat."""
+        if self.eidx.size:
+            self.vals[self.eidx] = (v ** 2 / a_lat)[:, None, None] * self.e_sin[None, :, None] * self.e_sgn
 
     def _run(self):
         """Solve; the primal solution, or None unless OSQP_SOLVED (non-finite iterates also reset the warm start)."""

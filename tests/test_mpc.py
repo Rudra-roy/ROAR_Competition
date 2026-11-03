@@ -171,3 +171,86 @@ def test_no_weave_with_steering_lag():
     peaks = [ey[i:i + 40].max() for i in range(0, 200, 40)]  # 2 s windows
     assert all(b <= a + 1e-3 for a, b in zip(peaks, peaks[1:])), peaks
     assert ey[-40:].max() < 0.05
+
+
+# ---- Task 8c options (mpc cfg keys a_tau_s, jerk_max, ellipse) ----
+
+def braking_corner_solves(cfg, ticks=120, x0=(0.3, 0.0, 60.0, 0.0, 0.0), times=None):
+    """Closed loop into the braking zone + R=40 corner; returns (MPC, raw QP solutions, commands)."""
+    m = FrenetMPC(V, cfg)
+    raw = capture(m)
+    vr = corner_ref()
+    x, s, u_prev, cmds = np.array(x0), S_C - 150, (0.0, 0.0), []
+    tau = cfg.get("a_tau_s", TAU)
+    for _ in range(ticks):
+        t0 = time.perf_counter()
+        k, a, ok = m.solve(x[0], x[1], x[2], s, CORNER, vr, u_prev)
+        if times is not None:
+            times.append(time.perf_counter() - t0)
+        assert ok and np.isfinite([k, a]).all()
+        e_y, e_psi, v, aa, kk = x
+        x = np.array([e_y + DT * v * e_psi, e_psi + DT * v * (kk - CORNER(s)), v + DT * aa,
+                      aa + DT / tau * (u_prev[1] - aa), kk + DT / TAU_K * (u_prev[0] - kk)])
+        s += DT * v
+        u_prev = (k, a)
+        cmds.append((k, a))
+    return m, raw, np.array(cmds)
+
+
+def horizon(m, z):
+    xs = z[:m.nx].reshape(-1, 5)
+    us = z[m.iu:m.iu + 2 * m.N].reshape(-1, 2)
+    return xs, us
+
+
+def test_a_tau_option_sets_longitudinal_lag():
+    m, raw, _ = braking_corner_solves(dict(CFG, a_tau_s=0.225), ticks=20)
+    xs, us = horizon(m, raw[-1])
+    c = DT / 0.225
+    np.testing.assert_allclose(xs[1:, 3], xs[:-1, 3] + c * (us[:, 1] - xs[:-1, 3]), atol=1e-3)
+
+
+def test_jerk_limit_over_horizon_and_from_u_prev():
+    J = 60.0
+    m, raw, cmds = braking_corner_solves(dict(CFG, jerk_max=J))
+    tol = 0.05 * J * DT
+    for z in raw:
+        _, us = horizon(m, z)
+        assert np.abs(np.diff(us[:, 1])).max() <= J * DT + tol
+    da = np.abs(np.diff(np.r_[0.0, cmds[:, 1]]))  # issued commands, from u_prev = 0
+    assert da.max() <= J * DT + 1e-6
+    assert cmds[:, 1].min() < -10  # still brakes hard for the corner
+    _, _, free = braking_corner_solves(CFG)
+    assert np.abs(np.diff(free[:, 1])).max() > J * DT  # the option is what limits it
+
+
+def ellipse_use(cfg_m, z):
+    xs, us = horizon(cfg_m, z)
+    A = V.a_brake * V.brake_scale
+    lat = xs[:-1, 2] ** 2 * us[:, 0] / (V.p["brake_ellipse_c"] * V.a_lat_max)
+    return (np.minimum(us[:, 1], 0) / A) ** 2 + lat ** 2, us[:, 1] < -0.5
+
+
+def test_ellipse_couples_braking_and_lateral():
+    """Into the corner over speed (70 m/s): the free MPC plans full braking at high lateral accel."""
+    x0 = (0.3, 0.0, 70.0, 0.0, 0.0)
+    m, raw, _ = braking_corner_solves(dict(CFG, ellipse=True), ticks=150, x0=x0)
+    worst = 0.0
+    for z in raw:
+        use, brk = ellipse_use(m, z)
+        if brk.any():
+            worst = max(worst, use[brk].max())
+    assert worst <= 1.08  # tangent polygon at 30/60 deg + linearised v^2: outer bound ~7 %
+    m0, raw0, _ = braking_corner_solves(CFG, ticks=150, x0=x0)
+    worst0 = max(ellipse_use(m0, z)[0][ellipse_use(m0, z)[1]].max(initial=0) for z in raw0)
+    assert worst0 > 1.2  # without the rows the plan exceeds the ellipse
+
+
+def test_options_deterministic_and_fast():
+    cfg = dict(CFG, a_tau_s=0.225, jerk_max=60.0, ellipse=True)
+    times = []
+    _, _, c1 = braking_corner_solves(cfg, times=times)
+    _, _, c2 = braking_corner_solves(cfg)
+    assert np.array_equal(c1, c2)
+    print("median solve %.2f ms, max %.2f ms" % (1e3 * np.median(times), 1e3 * max(times)))
+    assert np.median(times) < 0.02
