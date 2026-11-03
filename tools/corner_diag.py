@@ -7,7 +7,7 @@ vref_err  v - v_ref at turn-in; maxout  max outward offset (m); start_rel_ti  wh
 relative to turn-in (m); brake_frac  share of the drift with a_cmd < -3; beta  body sideslip yaw - course (rad, +
 into the turn) at max drift; ff  the sideslip feed-forward k*a_lat there; kcmd_kref, kyaw_kcmd  medians over the drift;
 aerr  median |mean accel of the next 4 ticks - a_cmd| while braking; jump  max |da_cmd| per tick; vexit  v - v_ref at
-apex + 80 m. Body yaw: the logged yaw column, else e_psi + feed-forward (legacy logs).
+apex + 80 m. Body yaw: the logged yaw column, else e_psi + feed-forward (legacy logs). ff = FF_K_LOGGED * a_lat_ref.
 """
 import sys, collections, numpy as np
 import os
@@ -18,6 +18,7 @@ from vehicle import Vehicle
 tr=Track(np.load(R+'/competition_code/data/racing_line.npz')['xy']); L=tr.length
 veh=Vehicle.from_json(R+'/competition_code/data/vehicle_params.json')
 DT=0.05
+FF_K_LOGGED=0.004  # sideslip_k of every Task 8/8b run (legacy logs without a yaw column)
 CORNERS=[(795,937),(1281,1329),(1619,1697),(2545,2695),(3719,3835),(3935,3993),(4093,4113),(5239,5413)]
 psiu=np.unwrap(tr.psi)
 I=lambda x,a: np.interp(x,tr.s,a,period=L)
@@ -25,7 +26,7 @@ rows=collections.defaultdict(list)
 for f in sys.argv[1:]:
     d=np.genfromtxt(f,delimiter=',',names=True)
     ls,v=d['line_s'],d['v']; al=np.array([veh.a_lat(x) for x in ls])
-    ff=veh.p['sideslip_k']*np.clip(v**2*d['kappa_ref'],-al,al)
+    ff=FF_K_LOGGED*np.clip(v**2*d['kappa_ref'],-al,al)
     psi=I(ls,psiu)
     yaw=np.unwrap(d['yaw']) if 'yaw' in d.dtype.names else psi+d['e_psi']+ff
     xy=np.c_[I(ls,tr.xy[:,0]),I(ls,tr.xy[:,1])]+d['e_y'][:,None]*np.c_[-np.sin(psi),np.cos(psi)]
