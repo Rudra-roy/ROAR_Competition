@@ -90,7 +90,8 @@
     "r_dkappa": 200000.0,
     "r_da": 0.01,
     "ey_max": 1.0,
-    "a_lat_margin": 1.1
+    "a_lat_margin": 1.1,
+    "ellipse": 1.0
   },
   "pedal_map": {
     "v": [
