@@ -92,7 +92,8 @@
     "ey_max": 1.0,
     "a_lat_margin": 1.1,
     "ellipse": 0.0,
-    "jerk_max": 60.0
+    "jerk_max": 60.0,
+    "a_tau_s": 0.225
   },
   "pedal_map": {
     "v": [
