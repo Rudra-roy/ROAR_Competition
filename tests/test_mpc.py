@@ -281,3 +281,14 @@ def test_a_lat_margin_scales_lateral_limit():
         out[m] = (k, a)
     assert out[1.1][0] > 1.03 * kc  # uses the headroom
     assert out[1.1][1] > out[1.0][1]  # and brakes less
+
+
+def test_fallback_uses_unscaled_a_lat():
+    """a_lat_margin is MPC headroom only: the pure-pursuit fallback clips curvature at the profile's a_lat."""
+    m = FrenetMPC(V, dict(CFG, a_lat_margin=1.2))
+    m.solver.update_settings(max_iter=3)
+    v = 50.0
+    k, _, ok = m.solve(5.0, 0.0, v, 0.0, lambda s: 0.0, lambda s: v, (0.0, 0.0), a_lat_fn=lambda s: 20.0)
+    assert ok is False
+    assert 20.0 / v ** 2 < V.K(v)  # the a_lat bound binds, not steering
+    assert abs(abs(k) - 20.0 / v ** 2) < 1e-9

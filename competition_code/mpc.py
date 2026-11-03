@@ -20,7 +20,8 @@ Options (cfg keys, absent = off): a_tau_s replaces brake_tau_s as the longitudin
 |a_k - a_{k-1}| <= jerk_max*dt (a_{-1} = u_prev); ellipse adds the friction-ellipse facets of tools/build_profile.py,
 (a/A_brk)^2 + (v^2 kappa/(c a_lat))^2 <= 1 while braking, as tangent lines at 30/60 deg with v^2 at v_k (c =
 brake_ellipse_c): -cos(t) a/A_brk +- sin(t) v_k^2 kappa/(c a_lat) <= 1 (loose for a > 0); a_lat_margin scales
-a_lat(s) for every MPC grip row (the profile sits at a_lat, so without headroom any correction curvature needs braking).
+a_lat(s) for every MPC grip row (the profile sits at a_lat, so without headroom any correction curvature needs braking);
+the pure-pursuit fallback keeps the unscaled a_lat(s).
 Decision vector z = [x_0..x_N, u_0..u_{N-1}, sig_1..sig_N]. P is constant; A keeps a fixed sparsity and only
 its v-dependent entries are rewritten each solve.
 """
@@ -181,9 +182,10 @@ class FrenetMPC:
                 ak += self.c * (ac - ak)
         kr = np.array([kappa_ref_fn(x) for x in s[:N]], float)
         vr = np.array([v_ref_fn(x) for x in s[1:]], float)
-        al = self.a_lat_margin * np.array([a_lat_fn(x) for x in s[:N]], float)
+        al_raw = np.array([a_lat_fn(x) for x in s[:N]], float)  # the fallback uses this unscaled limit
+        al = self.a_lat_margin * al_raw
         if not all(np.isfinite(a).all() for a in (x0, vl, kr, vr, al)):
-            return self._fallback(x0, kr[0], vr[0], al[0])  # never let a NaN into the solver
+            return self._fallback(x0, kr[0], vr[0], al_raw[0])  # never let a NaN into the solver
         ks = np.array([veh.K(x) for x in vl[:N]])
         ad = np.maximum([veh.a_drive(x) for x in vl[:N]], self.a_min)
         vt = np.maximum(vl[:N], V_TAN_MIN)
@@ -206,7 +208,7 @@ class FrenetMPC:
         self.solver.update(Ax=(self.vals * self.sc)[self.perm], q=q * self.sz, l=l / self.sr, u=u / self.sr)
         z = self._run()
         if z is None:
-            return self._fallback(x0, kr[0], vr[0], al[0])
+            return self._fallback(x0, kr[0], vr[0], al_raw[0])
         self._v_pred = z[2:nx:NX].copy()
         km0 = min(ks[0], al[0] / max(x0[2], 1.0) ** 2)
         kappa = float(np.clip(z[iu], -km0, km0))
