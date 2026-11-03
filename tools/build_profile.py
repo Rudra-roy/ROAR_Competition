@@ -29,17 +29,31 @@ def build_profile(track, veh, start_s, laps=3, grid=2.0):
     kappa = lambda q: np.interp(line(q), track.s, track.kappa, period=L)
 
     lines = veh.p["a_drive_lines"]
-    F = np.array([[1.0, b, 0.0] for _, b in lines] + [[-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]], float)
-    g_fixed = [a for a, _ in lines] + [veh.a_brake * veh.brake_scale]
+    a_brk = veh.a_brake * veh.brake_scale
+    # Constraint vector [a_long, v^2, a_lat, |a_lat|]. Box: a_long >= -a_brk, |a_lat| <= a_lat(s). With
+    # brake_ellipse_c also braking shares grip: (a_long/a_brk)^2 + (a_lat/(c a_lat(s)))^2 <= 1 for a_long < 0,
+    # as tangent lines at 15..75 deg (outer polygon, <= 0.9 % loose). Absent = box only.
+    c_el = veh.p.get("brake_ellipse_c")
+    th = np.radians([15, 30, 45, 60, 75]) if c_el else np.zeros(0)
+    F0 = np.array([[1.0, b, 0, 0] for _, b in lines] + [[-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, -1, 0], [0, 1, 0, 0]]
+                  + [[-np.cos(t) / a_brk, 0, 0, 0] for t in th], float)
+    g_fixed = [a for a, _ in lines] + [a_brk]
     vmax2 = veh.p["v_max"] ** 2
+
+    def F(q):
+        if not len(th):
+            return F0
+        Fq = F0.copy()
+        Fq[-len(th):, 3] = np.sin(th) / (c_el * veh.a_lat(line(q)))
+        return Fq
 
     def g(q):
         al = veh.a_lat(line(q))
-        return np.array(g_fixed + [al, al, vmax2])
+        return np.array(g_fixed + [al, al, vmax2] + [1.0] * len(th))
 
     pc = constraint.SecondOrderConstraint(
-        lambda q, qd, qdd: np.array([qdd[0], qd[0] ** 2, kappa(q) * qd[0] ** 2]),
-        lambda q: F, g, dof=1)
+        lambda q, qd, qdd: np.array([qdd[0], qd[0] ** 2, kappa(q) * qd[0] ** 2, abs(kappa(q)) * qd[0] ** 2]),
+        F, g, dof=1)
 
     class FreeEnd(algo.TOPPRA):  # toppra pins the end speed to sd_end; free it to [0, sd_end]
         def compute_controllable_sets(self, sdmin, sdmax):
