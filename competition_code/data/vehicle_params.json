@@ -12,6 +12,7 @@
   "a_brake": 15.92789999999979,
   "brake_delay_s": 0.045,
   "brake_tau_s": 0.16,
+  "steer_tau_s": 0.2,
   "v_max": 71.55216749358664,
   "v_max_source": "a_drive_root",
   "steer_gain_v": [
@@ -80,12 +81,11 @@
   "v_ref_min": 1.0,
   "brake_scale": 1.0,
   "sideslip_k": 0.004,
-  "steer_lead_s": 0.2,
   "mpc": {
     "N": 60,
     "dt": 0.05,
     "q_ey": 10,
-    "q_epsi": 50,
+    "q_epsi": 200,
     "q_v": 0.5,
     "r_dkappa": 200000.0,
     "r_da": 0.01,

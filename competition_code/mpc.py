@@ -1,16 +1,17 @@
 """LTV Frenet MPC on OSQP, with a pure-pursuit fallback.
 
-State x = [e_y, e_psi, v, a_act], input u = [kappa, a_cmd], linearised about e = 0, v = v_k:
+State x = [e_y, e_psi, v, a_act, k_act], input u = [kappa, a_cmd], linearised about e = 0, v = v_k:
     e_y+   = e_y + dt*v_k*e_psi
-    e_psi+ = e_psi + dt*v_k*(kappa - kappa_ref(s_k))
+    e_psi+ = e_psi + dt*v_k*(k_act - kappa_ref(s_k))
     v+     = v + dt*a_act
     a_act+ = a_act + dt/tau*(a_cmd - a_act)        first-order actuator lag, tau = brake_tau_s
-Curvature acts with no lag. v_k = previous solution's predicted speeds shifted one tick (first call / after a
+    k_act+ = k_act + dt/tau_k*(kappa - k_act)      steering -> yaw-curvature lag, tau_k = steer_tau_s
+v_k = previous solution's predicted speeds shifted one tick (first call / after a
 fallback or reset: the model driven by a damped P-law on v_ref, so the trajectory is reachable).
 s_k is integrated from v_k.
 One-tick delay: the measured state is propagated one step with u_prev and u_0 is the command for the next tick.
-a_act is not measured. FrenetMPC keeps it as internal state: the lag filter run over the issued commands, which
-equals the previous solve's predicted a_act at this tick. On the first call it starts at u_prev[1] (lag settled).
+a_act and k_act are not measured. FrenetMPC keeps them as internal state: the lag filters run over the issued
+commands, which equal the previous solve's predictions at this tick. On the first call they start at u_prev (settled).
 Constraints: |kappa_k| <= K(v_k) (steering), a_min <= a_k <= a_drive(v_k), and the lateral-acceleration limit
 |kappa| <= a_lat/v^2 as its tangent at v_t = max(v_k, V_TAN_MIN): +-kappa + (2a/v_t^3) v <= 3a/v_t^2. a/v^2 is
 convex, so every tangent is an inner bound, and it couples v and kappa: slowing down buys curvature.
@@ -24,11 +25,11 @@ import numpy as np
 import osqp
 import scipy.sparse as sp
 
-NX, NU = 4, 2
+NX, NU = 5, 2
 SLACK_L1, SLACK_L2 = 1e4, 10.0
 # Typical magnitudes of [e_y, e_psi, v, a_act] and [kappa, a_cmd]: the QP is solved in z' = z / mag with rows
 # divided by their own magnitude, so OSQP's inf-norm tolerances mean the same thing for kappa (~0.01) as for v.
-MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0), (0.01, 5.0)
+MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0, 0.01), (0.01, 5.0)
 V_TAN_MIN = 10.0  # m/s, lowest tangent point of the lateral-accel bound (below it K(v) binds anyway)
 K_V_FALLBACK = 2.0  # 1/s, fallback speed P-gain
 
@@ -38,6 +39,7 @@ class FrenetMPC:
         self.veh = veh
         self.N, self.dt = N, dt = int(cfg["N"]), float(cfg["dt"])
         self.c = c = dt / veh.p["brake_tau_s"]
+        self.ck = ck = min(dt / veh.p["steer_tau_s"], 1.0) if veh.p["steer_tau_s"] > 0 else 1.0
         self.a_min = -veh.a_brake * veh.brake_scale
         self.k_lin = 0.5 * c / dt  # 1/(2 tau): damping ~0.7 with the lag, for the first-call linearisation
         self.nx, nu = nx, nu = NX * (N + 1), NU * N
@@ -46,7 +48,7 @@ class FrenetMPC:
 
         # cost 1/2 z'Pz + q'z
         wx = np.zeros(NX * (N + 1))
-        wx[NX:] = np.tile([cfg["q_ey"], cfg["q_epsi"], cfg["q_v"], 0.0], N)
+        wx[NX:] = np.tile([cfg["q_ey"], cfg["q_epsi"], cfg["q_v"], 0.0, 0.0], N)
         D = sp.eye(N) - sp.eye(N, k=-1)
         self.r = np.array([cfg["r_dkappa"], cfg["r_da"]])
         P = sp.block_diag([sp.diags(2 * wx), sp.kron(2 * D.T @ D, sp.diags(self.r)),
@@ -67,10 +69,11 @@ class FrenetMPC:
             r, xk, uk = NX * (k + 1), NX * k, iu + NU * k
             for i in range(NX):
                 add(r + i, xk + NX + i, 1.0)
-                add(r + i, xk + i, -(1.0 - c) if i == 3 else -1.0)
-            vidx += [add(r, xk + 1, 0.0), add(r + 1, uk, 0.0)]
+                add(r + i, xk + i, {3: -(1.0 - c), 4: -(1.0 - ck)}.get(i, -1.0))
+            vidx += [add(r, xk + 1, 0.0), add(r + 1, xk + 4, 0.0)]
             add(r + 2, xk + 3, -dt)
             add(r + 3, uk + 1, -c)
+            add(r + 4, uk, -ck)
         for j in range(nu):  # input boxes
             add(nx + j, iu + j, 1.0)
         self.rl = rl = nx + nu
@@ -117,7 +120,7 @@ class FrenetMPC:
 
     def reset(self):
         """Forget the linearisation, the actuator estimate and the warm start (respawn / teleport)."""
-        self._a_act = None
+        self._a_act = self._k_act = None
         self._v_pred = None
         self.solver.warm_start(x=np.zeros(self.nz), y=np.zeros(self.m))
 
@@ -126,9 +129,11 @@ class FrenetMPC:
         a_lat_fn = a_lat_fn or (lambda s: veh.a_lat_max)
         k_prev, a_prev = float(u_prev[0]), float(u_prev[1])
         a_act = a_prev if self._a_act is None else self._a_act
-        x0 = np.array([e_y + dt * v * e_psi, e_psi + dt * v * (k_prev - kappa_ref_fn(s_total)),
-                       v + dt * a_act, a_act + self.c * (a_prev - a_act)])
+        k_act = k_prev if self._k_act is None else self._k_act
+        x0 = np.array([e_y + dt * v * e_psi, e_psi + dt * v * (k_act - kappa_ref_fn(s_total)),
+                       v + dt * a_act, a_act + self.c * (a_prev - a_act), k_act + self.ck * (k_prev - k_act)])
         self._a_act = x0[3] if math.isfinite(x0[3]) else None
+        self._k_act = x0[4] if math.isfinite(x0[4]) else None
         s0 = s_total + dt * v
 
         vl = np.empty(N + 1)

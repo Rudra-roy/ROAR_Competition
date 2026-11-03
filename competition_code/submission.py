@@ -92,11 +92,8 @@ class RoarCompetitionSolution:
 
         kappa, a, ok = self.mpc.solve(e_y, e_psi, v, s_total, self._kappa_ref, self._v_ref_mpc, self.u_prev,
                                       self._a_lat)
-        # Phase lead on the curvature command: the car's yaw response lags the steer by ~0.2-0.3 s above 30 m/s,
-        # which the MPC model leaves out.
-        k_steer = kappa + self.veh.p["steer_lead_s"] * (kappa - self.u_prev[0]) / self.mpc.dt
         self.u_prev = (kappa, a)
-        steer = self.veh.steer_for(k_steer, v)
+        steer = self.veh.steer_for(kappa, v)
         throttle, brake = self.veh.pedals_for(a, v)
         control = {
             "throttle": throttle,
