@@ -16,9 +16,10 @@ from vehicle import Vehicle, load_profile
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
-LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
+LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "yaw", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
             "steer", "throttle", "brake", "ok")
 START_S_TOL_M = 5.0
+COURSE_V_MIN = 3.0  # m/s: below it the velocity direction is noise, use the body yaw
 
 
 class RoarCompetitionSolution:
@@ -72,19 +73,26 @@ class RoarCompetitionSolution:
     async def step(self) -> None:
         p = np.asarray(self.location_sensor.get_last_gym_observation(), dtype=float)
         yaw = float(self.rpy_sensor.get_last_gym_observation()[2])
-        v = float(np.linalg.norm(self.velocity_sensor.get_last_gym_observation()))
+        vel = np.asarray(self.velocity_sensor.get_last_gym_observation(), dtype=float)
+        v = float(np.linalg.norm(vel))
         # Same teleport test as Progress: a respawn restarts progress, so forget the MPC's state too.
         if self._p_prev is not None and np.hypot(*(p[:2] - self._p_prev)) > TELEPORT_JUMP_M:
             self.mpc.reset()
             self.u_prev = (0.0, 0.0)
         self._p_prev = p[:2]
-        s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
-        # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (run 1 fit:
-        # 0.003-0.005 rad per m/s^2), so its velocity points outward. The MPC's e_y' = v*e_psi model assumes no
-        # slip: track the course instead by asking for yaw = line heading + beta.
-        # Clipped to the grip limit: over speed at corner entry v^2*kappa would ask for a huge heading offset.
+        s_total, e_y, e_psi, idx = self.progress.update(p, yaw)
         a_lat = self._a_lat(s_total)
-        e_psi -= self.veh.p["sideslip_k"] * float(np.clip(v * v * self._kappa_ref(s_total), -a_lat, a_lat))
+        if self.veh.p.get("course_heading") and np.hypot(vel[0], vel[1]) > COURSE_V_MIN:
+            # Measured sideslip: the MPC's e_y' = v*e_psi is exact for the direction of travel. At braking turn-ins
+            # the body slides 0.2-0.26 rad into the turn (2.5-4x the feed-forward below), so body yaw made the MPC
+            # unwind the steering while the car drifted wide (Task 8c diagnosis).
+            e_psi = self.track.heading_error(idx, float(np.arctan2(vel[1], vel[0])))
+        else:
+            # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (run 1 fit:
+            # 0.003-0.005 rad per m/s^2), so its velocity points outward. The MPC's e_y' = v*e_psi model assumes no
+            # slip: track the course instead by asking for yaw = line heading + beta.
+            # Clipped to the grip limit: over speed at corner entry v^2*kappa would ask for a huge heading offset.
+            e_psi -= self.veh.p["sideslip_k"] * float(np.clip(v * v * self._kappa_ref(s_total), -a_lat, a_lat))
         if self.tick == 0:
             L = self.track.length
             d = (self.progress.start_s - self.profile_start_s + L / 2) % L - L / 2
@@ -107,7 +115,7 @@ class RoarCompetitionSolution:
         }
         await self.vehicle.apply_action(control)
 
-        self.last = dict(tick=self.tick, s_total=s_total, line_s=self._line_s(s_total), e_y=e_y, e_psi=e_psi, v=v,
+        self.last = dict(tick=self.tick, s_total=s_total, line_s=self._line_s(s_total), e_y=e_y, e_psi=e_psi, yaw=yaw, v=v,
                          v_ref=self.v_ref(s_total), kappa_ref=self._kappa_ref(s_total), kappa_cmd=kappa, a_cmd=a,
                          steer=steer, throttle=throttle, brake=brake, ok=int(ok))
         if self._log:
