@@ -35,6 +35,13 @@ def test_brake_ellipse_bounds_combined_grip():
     assert (v <= vb + 1e-6).all() and v[arc].min() > 0.95 * vb[arc].min()
 
 
+def test_brake_ellipse_c_below_one_rejected():
+    """c < 1 is not a pure braking knob (the 75 deg facet also caps pure lateral grip): reject it."""
+    tr = SimpleNamespace(length=200.0, s=np.arange(0.0, 200.0, 1.0), kappa=np.zeros(200))
+    with pytest.raises(ValueError):
+        build_profile(tr, Vehicle(dict(BOX.p, brake_ellipse_c=0.9)), 0.0, laps=1)
+
+
 def _flat(length, kappa):
     s = np.arange(0.0, length, 1.0)
     return SimpleNamespace(length=float(length), s=s, kappa=np.full_like(s, kappa))

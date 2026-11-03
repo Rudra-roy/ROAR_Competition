@@ -34,6 +34,8 @@ def build_profile(track, veh, start_s, laps=3, grid=2.0):
     # brake_ellipse_c also braking shares grip: (a_long/a_brk)^2 + (a_lat/(c a_lat(s)))^2 <= 1 for a_long < 0,
     # as tangent lines at 15..75 deg (outer polygon, <= 0.9 % loose). Absent = box only.
     c_el = veh.p.get("brake_ellipse_c")
+    if c_el is not None and c_el < 1:  # the 75 deg facet would also cap pure lateral grip at ~1.035 c a_lat
+        raise ValueError("brake_ellipse_c must be >= 1, got %r" % c_el)
     th = np.radians([15, 30, 45, 60, 75]) if c_el else np.zeros(0)
     F0 = np.array([[1.0, b, 0, 0] for _, b in lines] + [[-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, -1, 0], [0, 1, 0, 0]]
                   + [[-np.cos(t) / a_brk, 0, 0, 0] for t in th], float)
