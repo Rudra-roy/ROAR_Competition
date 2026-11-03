@@ -3,14 +3,22 @@ import time
 
 import numpy as np
 
-from mpc import FrenetMPC
+from mpc import MAX_ITER, FrenetMPC
 from profile_oracle import oracle_profile
 from vehicle import Vehicle
 
 V = Vehicle.from_json(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json"))
 CFG = V.p["mpc"]
 DT = CFG["dt"]
-TAU = V.p["brake_tau_s"]
+TAU = CFG.get("a_tau_s", V.p["brake_tau_s"])  # the shipped config's longitudinal lag
+BASE = {k: x for k, x in CFG.items() if k not in ("a_tau_s", "jerk_max", "ellipse", "a_lat_margin")}  # options off
+M = CFG.get("a_lat_margin", 1.0)
+
+
+def kappa_max(v):
+    """The MPC's curvature bound: steering, and the lateral-accel limit with the shipped headroom."""
+    v = max(v, 1.0)
+    return min(V.K(v), M * V.a_lat_max / v ** 2)
 TAU_K = V.p["steer_tau_s"]
 A_MIN = -V.a_brake * V.brake_scale
 
@@ -65,17 +73,17 @@ def test_respects_input_bounds():
         m = FrenetMPC(V, CFG)  # fresh: a_act starts at u_prev[1] = 0, so the delayed-step speed is v
         raw = capture(m)
         kref = lambda s, c=rng.uniform(-0.05, 0.05): c * np.sin(s / 30.0)
-        u_prev = (rng.uniform(-1, 1) * V.kappa_max(v), 0.0)  # a previous command is itself within the bound
+        u_prev = (rng.uniform(-1, 1) * kappa_max(v), 0.0)  # a previous command is itself within the bound
         k, a, ok = m.solve(e_y, e_psi, v, rng.uniform(0, 5000), kref, lambda s, vr=rng.uniform(0, 70): vr, u_prev)
         assert np.isfinite([k, a]).all()
-        assert abs(k) <= V.kappa_max(v) + 1e-3
+        assert abs(k) <= kappa_max(v) + 1e-3
         assert A_MIN - 1e-3 <= a <= V.a_drive(v) + 1e-3
         if abs(e_y + DT * v * e_psi) <= CFG["ey_max"]:  # delay-propagated state inside the soft bound
             assert ok, (e_y, e_psi, v)
         fails += not ok
         if ok:  # the QP itself, before the clip
             kq, aq = raw[-1][m.iu:m.iu + 2]
-            assert abs(kq) <= V.kappa_max(v) + 1e-3
+            assert abs(kq) <= kappa_max(v) + 1e-3
             # a: OSQP's inf-norm residual tolerance scales with the largest scaled variable, which is the e_y
             # slack (~100 m) in these beyond-grip states; measured worst raw overshoot 0.62 m/s^2 (0.46 before the
             # k_act state). The command itself is clipped exactly (asserted above).
@@ -113,7 +121,7 @@ def test_fallback_on_solver_failure():
         k, a, ok = m.solve(e_y, *args)
         assert ok is False and np.isfinite([k, a]).all()
         assert -V.kappa_max(30.0) - 1e-9 <= k < 0  # car left of the line -> steer right, back toward it
-    m.solver.update_settings(max_iter=4000)
+    m.solver.update_settings(max_iter=MAX_ITER)
     assert m.solve(0.8, *args)[2]
 
 
@@ -181,7 +189,7 @@ def braking_corner_solves(cfg, ticks=120, x0=(0.3, 0.0, 60.0, 0.0, 0.0), times=N
     raw = capture(m)
     vr = corner_ref()
     x, s, u_prev, cmds = np.array(x0), S_C - 150, (0.0, 0.0), []
-    tau = cfg.get("a_tau_s", TAU)
+    tau = cfg.get("a_tau_s", V.p["brake_tau_s"])
     for _ in range(ticks):
         t0 = time.perf_counter()
         k, a, ok = m.solve(x[0], x[1], x[2], s, CORNER, vr, u_prev)
@@ -204,7 +212,7 @@ def horizon(m, z):
 
 
 def test_a_tau_option_sets_longitudinal_lag():
-    m, raw, _ = braking_corner_solves(dict(CFG, a_tau_s=0.225), ticks=20)
+    m, raw, _ = braking_corner_solves(dict(BASE, a_tau_s=0.225), ticks=20)
     xs, us = horizon(m, raw[-1])
     c = DT / 0.225
     np.testing.assert_allclose(xs[1:, 3], xs[:-1, 3] + c * (us[:, 1] - xs[:-1, 3]), atol=1e-3)
@@ -212,7 +220,7 @@ def test_a_tau_option_sets_longitudinal_lag():
 
 def test_jerk_limit_over_horizon_and_from_u_prev():
     J = 60.0
-    m, raw, cmds = braking_corner_solves(dict(CFG, jerk_max=J))
+    m, raw, cmds = braking_corner_solves(dict(BASE, jerk_max=J))
     tol = 0.05 * J * DT
     for z in raw:
         _, us = horizon(m, z)
@@ -220,7 +228,7 @@ def test_jerk_limit_over_horizon_and_from_u_prev():
     da = np.abs(np.diff(np.r_[0.0, cmds[:, 1]]))  # issued commands, from u_prev = 0
     assert da.max() <= J * DT + 1e-6
     assert cmds[:, 1].min() < -10  # still brakes hard for the corner
-    _, _, free = braking_corner_solves(CFG)
+    _, _, free = braking_corner_solves(BASE)
     assert np.abs(np.diff(free[:, 1])).max() > J * DT  # the option is what limits it
 
 
@@ -234,20 +242,20 @@ def ellipse_use(cfg_m, z):
 def test_ellipse_couples_braking_and_lateral():
     """Into the corner over speed (70 m/s): the free MPC plans full braking at high lateral accel."""
     x0 = (0.3, 0.0, 70.0, 0.0, 0.0)
-    m, raw, _ = braking_corner_solves(dict(CFG, ellipse=True), ticks=150, x0=x0)
+    m, raw, _ = braking_corner_solves(dict(BASE, ellipse=True), ticks=150, x0=x0)
     worst = 0.0
     for z in raw:
         use, brk = ellipse_use(m, z)
         if brk.any():
             worst = max(worst, use[brk].max())
     assert worst <= 1.08  # tangent polygon at 30/60 deg + linearised v^2: outer bound ~7 %
-    m0, raw0, _ = braking_corner_solves(CFG, ticks=150, x0=x0)
+    m0, raw0, _ = braking_corner_solves(BASE, ticks=150, x0=x0)
     worst0 = max(ellipse_use(m0, z)[0][ellipse_use(m0, z)[1]].max(initial=0) for z in raw0)
     assert worst0 > 1.2  # without the rows the plan exceeds the ellipse
 
 
 def test_options_deterministic_and_fast():
-    cfg = dict(CFG, a_tau_s=0.225, jerk_max=60.0, ellipse=True)
+    cfg = dict(BASE, a_tau_s=0.225, jerk_max=60.0, ellipse=True, a_lat_margin=1.1)
     times = []
     _, _, c1 = braking_corner_solves(cfg, times=times)
     _, _, c2 = braking_corner_solves(cfg)
@@ -262,7 +270,7 @@ def test_a_lat_margin_scales_lateral_limit():
     kc = V.a_lat_max / v ** 2
     out = {}
     for m in (1.0, 1.1):
-        mpc = FrenetMPC(V, dict(CFG, a_lat_margin=m))
+        mpc = FrenetMPC(V, dict(BASE, a_lat_margin=m))
         raw = capture(mpc)
         k, a, ok = mpc.solve(-0.5, 0.0, v, 0.0, lambda s: kc, lambda s: v, (kc, 0.0))
         assert ok

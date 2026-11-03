@@ -38,6 +38,7 @@ ELLIPSE_DEG = (30.0, 60.0)  # 0 deg = the a_min box, 90 deg ~ the lateral tangen
 MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0, 0.01), (0.01, 5.0)
 V_TAN_MIN = 10.0  # m/s, lowest tangent point of the lateral-accel bound (below it K(v) binds anyway)
 K_V_FALLBACK = 2.0  # 1/s, fallback speed P-gain
+MAX_ITER = 8000  # cold solves (first call, after a reset) with jerk rows need up to ~5k iterations
 
 
 class FrenetMPC:
@@ -143,7 +144,7 @@ class FrenetMPC:
         # duality-gap test held converged iterates to max_iter (12 % of near-limit cold solves). Termination still
         # needs the primal/dual residuals within eps_abs/eps_rel, which the MAG scaling makes meaningful per row.
         self.solver.setup(sp.triu(P, format="csc"), self.q * sz, A, self.l / sr, self.u / sr, verbose=False,
-                          warm_starting=True, polishing=False, eps_abs=1e-4, eps_rel=5e-4, max_iter=4000,
+                          warm_starting=True, polishing=False, eps_abs=1e-4, eps_rel=5e-4, max_iter=MAX_ITER,
                           adaptive_rho_interval=25, check_dualgap=False)
         self.reset()
 
