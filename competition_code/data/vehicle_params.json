@@ -89,7 +89,8 @@
     "q_v": 0.5,
     "r_dkappa": 200000.0,
     "r_da": 0.01,
-    "ey_max": 1.0
+    "ey_max": 1.0,
+    "a_lat_margin": 1.1
   },
   "pedal_map": {
     "v": [
