@@ -62,38 +62,14 @@ def test_sideslip_feedforward_bounded_by_grip():
     assert np.isfinite(car.control["steer"])
 
 
-def _sliding(course_heading):
-    """On the line at the tightest corner, body yawed 0.2 rad into the turn, velocity along the line."""
+
+def test_log_row_has_body_yaw():
     loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
     sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
     asyncio.run(sol.initialize())
-    sol.veh.p["course_heading"] = course_heading
-    tr = sol.track
-    i = int(np.argmax(np.abs(tr.kappa)))
-    beta = 0.2 * np.sign(tr.kappa[i])
-    loc.val = np.r_[tr.xy[i], 0.0]
-    rpy.val = np.array([0.0, 0.0, tr.psi[i] + beta])
-    vel.val = 30.0 * np.r_[np.cos(tr.psi[i]), np.sin(tr.psi[i]), 0.0]
-    asyncio.run(sol.step())
-    return sol.last, beta
-
-
-def test_course_heading_uses_velocity_direction():
-    row, beta = _sliding(True)  # the MPC sees the direction of travel: along the line
-    assert abs(row["e_psi"]) < 1e-3
-    assert abs(row["yaw"] - row["e_psi"] - beta) > 0.1  # body yaw is still logged
-    row, beta = _sliding(False)  # legacy: body yaw minus the feed-forward beta
-    assert abs(row["e_psi"]) > 0.05  # 0.2 minus the clipped feed-forward (~0.12)
-
-
-def test_course_heading_falls_back_to_yaw_when_slow():
-    loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
-    sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
-    asyncio.run(sol.initialize())
-    sol.veh.p["course_heading"] = True
     i = 100
     loc.val = np.r_[sol.track.xy[i], 0.0]
     rpy.val = np.array([0.0, 0.0, sol.track.psi[i] + 0.1])
-    vel.val = 0.5 * np.r_[-np.sin(sol.track.psi[i]), np.cos(sol.track.psi[i]), 0.0]  # 0.5 m/s sideways
+    vel.val = 20.0 * np.r_[np.cos(sol.track.psi[i]), np.sin(sol.track.psi[i]), 0.0]
     asyncio.run(sol.step())
-    assert abs(sol.last["e_psi"] - 0.1) < 0.02  # yaw - line heading (feed-forward ~0 on a straight)
+    assert sol.last["yaw"] == rpy.val[2]  # the body yaw, for the sideslip fit (tools/fit_sideslip.py)
