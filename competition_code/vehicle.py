@@ -52,3 +52,10 @@ class Vehicle:
     def a_lat(self, s_line):
         i = bisect.bisect_right(self._starts, s_line) - 1  # -1 wraps to last section
         return self._vals[i]
+
+
+def load_profile(path, speed_scale=1.0):
+    """v_ref(s_total) from speed_profile.npz: linear interp, clamped at the ends, scaled."""
+    d = np.load(path)
+    s, v = d["s"], d["v"]
+    return lambda s_total: speed_scale * float(np.interp(s_total, s, v))

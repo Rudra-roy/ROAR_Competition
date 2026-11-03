@@ -34,3 +34,14 @@ def test_k_continuous_and_positive():
 def test_a_drive_matches_json():
     assert abs(V.a_drive(20) - 3.64) < 0.05
     assert abs(V.a_drive(V.p["v_max"])) < 0.05
+
+
+def test_load_profile_interp_scale_clamp(tmp_path):
+    from vehicle import load_profile
+    f = tmp_path / "p.npz"
+    np.savez(f, s=np.array([0.0, 10.0, 20.0]), v=np.array([0.0, 20.0, 30.0]), start_s=5.0)
+    vr = load_profile(str(f), speed_scale=0.5)
+    assert abs(vr(5.0) - 5.0) < 1e-9
+    assert abs(vr(15.0) - 12.5) < 1e-9
+    assert vr(1e6) == 15.0
+    assert load_profile(str(f))(10.0) == 20.0
