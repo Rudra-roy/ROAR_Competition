@@ -79,6 +79,10 @@ class RoarCompetitionSolution:
             self.u_prev = (0.0, 0.0)
         self._p_prev = p[:2]
         s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
+        # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (run 1 fit:
+        # 0.003-0.005 rad per m/s^2), so its velocity points outward. The MPC's e_y' = v*e_psi model assumes no
+        # slip: track the course instead by asking for yaw = line heading + beta.
+        e_psi -= self.veh.p["sideslip_k"] * v * v * self._kappa_ref(s_total)
         if self.tick == 0:
             L = self.track.length
             d = (self.progress.start_s - self.profile_start_s + L / 2) % L - L / 2
@@ -88,8 +92,11 @@ class RoarCompetitionSolution:
 
         kappa, a, ok = self.mpc.solve(e_y, e_psi, v, s_total, self._kappa_ref, self._v_ref_mpc, self.u_prev,
                                       self._a_lat)
+        # Phase lead on the curvature command: the car's yaw response lags the steer by ~0.2-0.3 s above 30 m/s,
+        # which the MPC model leaves out.
+        k_steer = kappa + self.veh.p["steer_lead_s"] * (kappa - self.u_prev[0]) / self.mpc.dt
         self.u_prev = (kappa, a)
-        steer = self.veh.steer_for(kappa, v)
+        steer = self.veh.steer_for(k_steer, v)
         throttle, brake = self.veh.pedals_for(a, v)
         control = {
             "throttle": throttle,
