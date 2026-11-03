@@ -63,6 +63,7 @@ class SysIdSolution:
         self.f = open(os.path.join(LOGS, "sysid.csv"), "w")
         self.f.write("t,x,y,yaw,v,throttle,brake,steer,yaw_rate\n")
         self.tick, self.prev_yaw, self.vmax = 0, None, 0.0
+        self.braking = False
 
     async def step(self):
         tr = self.track
@@ -84,10 +85,12 @@ class SysIdSolution:
         steer = float(np.clip(STEER_MUL * np.arctan(2 * WHEELBASE_PP * np.sin(alpha) / L), -1.0, 1.0))
 
         vl = self.v_lim[idx]
-        if v <= vl - 0.5:
-            thr, brk = 1.0, 0.0
-        elif v > vl + 1.0:
+        # brake latches: once on (v > v_lim + 1) it stays full until v <= v_lim, for clean full-brake data
+        self.braking = v > vl + 1.0 or (self.braking and v > vl)
+        if self.braking:
             thr, brk = 0.0, 1.0
+        elif v <= vl - 0.5:
+            thr, brk = 1.0, 0.0
         else:
             thr, brk = float(np.clip(0.3 + 0.3 * (vl - v), 0.0, 1.0)), 0.0
         await self.vehicle.apply_action({"throttle": thr, "steer": steer, "brake": brk,
