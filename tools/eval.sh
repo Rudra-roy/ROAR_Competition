@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: tools/eval.sh <runs> <label>
 # Appends to results.csv: git_sha,label,run,sim_time_s,collisions,status
+# ROAR_SERVER_ARGS (e.g. -RenderOffScreen) is passed to run_monza.sh.
 set -u
 RUNS=${1:?usage: eval.sh <runs> <label>}; LABEL=${2:?usage: eval.sh <runs> <label>}
 REPO=$(cd "$(dirname "$0")/.." && pwd); PARENT=$(dirname "$REPO")
@@ -18,7 +19,7 @@ for i in $(seq 1 "$RUNS"); do
   killsrv
   T0=$(date +%s)
   LOG="$REPO/logs/${LABEL}_${i}"
-  "$PARENT/run_monza.sh" > "$LOG.server.log" 2>&1 &
+  "$PARENT/run_monza.sh" ${ROAR_SERVER_ARGS:-} > "$LOG.server.log" 2>&1 &
   status=server_hang
   for _ in $(seq 300); do port_open && { status=up; break; }; sleep 1; done
   sim=""; coll=0
