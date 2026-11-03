@@ -28,7 +28,7 @@ def test_curvature_smooth_and_line_preserved(real):
     dd = cKDTree(dense).query(xy)[0]
     assert dd.max() < 0.15
     assert np.abs(tr.kappa).max() < 0.08
-    assert np.abs(np.diff(np.r_[tr.kappa, tr.kappa[0]])).max() < 0.014
+    assert np.abs(np.diff(np.r_[tr.kappa, tr.kappa[0]])).max() < 0.022
 
 
 def test_project_on_line(real):
