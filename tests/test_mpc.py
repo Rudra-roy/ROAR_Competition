@@ -1,6 +1,5 @@
 import os
 import time
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -22,9 +21,9 @@ def plant(x, u, kappa_ref):
                      a + DT / TAU * (u[1] - a)])
 
 
-def closed_loop(m, x, s, kappa_fn, v_ref_fn, ticks, times=None):
+def closed_loop(m, x, s, kappa_fn, v_ref_fn, ticks, times=None, u_prev=(0.0, 0.0)):
     """1-tick delay: the command computed at tick k is applied during tick k+1."""
-    u_prev, log = (0.0, 0.0), []
+    log = []
     for _ in range(ticks):
         t0 = time.perf_counter()
         k, a, ok = m.solve(x[0], x[1], x[2], s, kappa_fn, v_ref_fn, u_prev)
@@ -45,17 +44,41 @@ def test_converges_on_straight():
     assert ey.min() > -0.2  # overshoot
 
 
+def capture(m):
+    """Record the raw OSQP solution of every solve, unscaled to physical units (before FrenetMPC clips it)."""
+    raw, orig = [], m.solver.solve
+
+    def wrapped(*a, **kw):
+        res = orig(*a, **kw)
+        raw.append(res.x * m.sz)
+        return res
+    m.solver.solve = wrapped
+    return raw
+
+
 def test_respects_input_bounds():
     rng = np.random.default_rng(0)
+    fails = 0
     for _ in range(200):
-        v = rng.uniform(0, 70)
+        e_y, e_psi, v = rng.uniform(-2, 2), rng.uniform(-0.3, 0.3), rng.uniform(0, 70)
         m = FrenetMPC(V, CFG)  # fresh: a_act starts at u_prev[1] = 0, so the delayed-step speed is v
+        raw = capture(m)
         kref = lambda s, c=rng.uniform(-0.05, 0.05): c * np.sin(s / 30.0)
-        k, a, ok = m.solve(rng.uniform(-2, 2), rng.uniform(-0.3, 0.3), v, rng.uniform(0, 5000),
-                           kref, lambda s, vr=rng.uniform(0, 70): vr, (rng.uniform(-0.05, 0.05), 0.0))
+        u_prev = (rng.uniform(-1, 1) * V.kappa_max(v), 0.0)  # a previous command is itself within the bound
+        k, a, ok = m.solve(e_y, e_psi, v, rng.uniform(0, 5000), kref, lambda s, vr=rng.uniform(0, 70): vr, u_prev)
         assert np.isfinite([k, a]).all()
         assert abs(k) <= V.kappa_max(v) + 1e-3
         assert A_MIN - 1e-3 <= a <= V.a_drive(v) + 1e-3
+        if abs(e_y + DT * v * e_psi) <= CFG["ey_max"]:  # delay-propagated state inside the soft bound
+            assert ok, (e_y, e_psi, v)
+        fails += not ok
+        if ok:  # the QP itself, before the clip
+            kq, aq = raw[-1][m.iu:m.iu + 2]
+            assert abs(kq) <= V.kappa_max(v) + 1e-3
+            # a: OSQP's inf-norm residual tolerance scales with the largest scaled variable, which is the e_y
+            # slack (~100 m) in these beyond-grip states; measured worst raw overshoot 0.46 m/s^2.
+            assert A_MIN - 0.5 <= aq <= V.a_drive(v) + 0.5
+    assert fails <= 4  # 2 % of 200
 
 
 S_C = 500.0  # corner entry
@@ -79,17 +102,46 @@ def test_brakes_before_corner():
     assert ok and a > 0  # far from the corner it still drives
 
 
-def test_fallback_on_solver_failure(monkeypatch):
+def test_fallback_on_solver_failure():
     m = FrenetMPC(V, CFG)
-    m.solve(0.5, 0.0, 30.0, 0.0, lambda s: 0.0, lambda s: 30.0, (0.0, 0.0))
-    import osqp
-    bad = SimpleNamespace(x=np.full(m.nz, np.nan),
-                          info=SimpleNamespace(status_val=osqp.SolverStatus.OSQP_MAX_ITER_REACHED))
-    monkeypatch.setattr(m.solver, "solve", lambda *a, **kw: bad)
-    k, a, ok = m.solve(0.5, 0.0, 30.0, 0.0, lambda s: 0.0, lambda s: 30.0, (0.0, 0.0))
+    args = (0.0, 30.0, 0.0, lambda s: 0.0, lambda s: 30.0, (0.0, 0.0))
+    assert m.solve(0.5, *args)[2]
+    m.solver.update_settings(max_iter=3)  # a real OSQP failure: max_iter reached
+    for e_y in (0.6, 0.7, 0.8):
+        k, a, ok = m.solve(e_y, *args)
+        assert ok is False and np.isfinite([k, a]).all()
+        assert -V.kappa_max(30.0) - 1e-9 <= k < 0  # car left of the line -> steer right, back toward it
+    m.solver.update_settings(max_iter=4000)
+    assert m.solve(0.8, *args)[2]
+
+
+def test_nan_input_does_not_poison():
+    m = FrenetMPC(V, CFG)
+    args = (0.0, 30.0, 0.0, lambda s: 0.0)
+    assert m.solve(0.5, *args, lambda s: 30.0, (0.0, 0.0))[2]
+    k, a, ok = m.solve(0.5, *args, lambda s: float("nan"), (0.0, 0.0))
     assert ok is False and np.isfinite([k, a]).all()
-    assert k < 0  # car left of the line -> steer right, back toward it
-    assert abs(k) <= V.kappa_max(30.0) + 1e-9
+    for _ in range(5):
+        k, a, ok = m.solve(0.5, *args, lambda s: 30.0, (k, a))
+        assert ok and np.isfinite([k, a]).all()
+
+
+def test_reset_clears_state():
+    m = FrenetMPC(V, CFG)
+    m.solve(0.5, 0.0, 30.0, 0.0, lambda s: 0.0, lambda s: 30.0, (0.0, 2.0))
+    m.reset()
+    assert m._v_pred is None and m._a_act is None
+    assert m.solve(0.0, 0.0, 0.0, 0.0, lambda s: 0.0, lambda s: 0.0, (0.0, 0.0))[2]
+
+
+def test_slows_for_tight_corner_at_limit():
+    v_c = np.sqrt(V.a_lat_max * 40)  # v_ref exactly at the grip limit (speed_scale 1.0)
+    log = closed_loop(FrenetMPC(V, CFG), np.array([0.0, 0, v_c, 0]), 0.0, lambda s: 1 / 40.0,
+                      lambda s: v_c, ticks=240, u_prev=(1 / 40.0, 0.0))  # already on the circle
+    assert np.abs(log[:, 0]).max() <= 0.3
+    vr = corner_ref()  # straight -> braking -> the same corner, oracle at scale 1.0
+    log = closed_loop(FrenetMPC(V, CFG), np.array([0.0, 0, 60.0, 0]), S_C - 150, CORNER, vr, ticks=300)
+    assert np.abs(log[:, 0]).max() <= 0.3
 
 
 def corner_loop(ticks, times=None):
