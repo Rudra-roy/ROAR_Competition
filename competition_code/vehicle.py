@@ -16,6 +16,14 @@ class Vehicle:
         self._starts = [s for s, _ in secs]
         self._vals = [a for _, a in secs]
         self.a_lat_max = max(self._vals)
+        pm = params.get("pedal_map")
+        self._pm = None
+        if pm:  # measured steady-state accel on one signed pedal axis u = throttle - brake (exclusive pedals)
+            u = np.r_[-np.asarray(pm["brk"][:0:-1], float), pm["thr"]]
+            tab = np.c_[np.asarray(pm["a_brk"], float)[:, :0:-1], np.asarray(pm["a_thr"], float)]
+            for j in range(tab.shape[1] - 2, -1, -1):  # strictly increasing in u per speed, so it inverts
+                tab[:, j] = np.minimum(tab[:, j], tab[:, j + 1] - 1e-3)
+            self._pm = (np.asarray(pm["v"], float), u, tab)
 
     @classmethod
     def from_json(cls, path):
@@ -43,6 +51,14 @@ class Vehicle:
         return float(np.clip(-kappa / self.K(v), -1.0, 1.0))
 
     def pedals_for(self, a_cmd, v):
+        if self._pm is not None:
+            # The measured map is continuous and monotone in u at every speed (no gap), so the inverse is one
+            # pedal setting: linear in v between grid rows, then interp a -> u (clamped to full brake/throttle).
+            vg, ug, tab = self._pm
+            i = int(np.clip(np.searchsorted(vg, v) - 1, 0, len(vg) - 2))
+            f = min(max((v - vg[i]) / (vg[i + 1] - vg[i]), 0.0), 1.0)
+            u = float(np.interp(a_cmd, (1 - f) * tab[i] + f * tab[i + 1], ug))
+            return (u, 0.0) if u >= 0 else (0.0, -u)
         if a_cmd >= 0:
             ad = self.a_drive(v)
             th = (1.0 if a_cmd > 0 else 0.0) if ad <= 0 else a_cmd / ad
