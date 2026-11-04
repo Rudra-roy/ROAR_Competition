@@ -144,3 +144,17 @@ def test_steer_cap_optional_and_speed_dependent():
     assert abs(capped.steer_for(-0.5 * capped.K(20.0), 20.0) - 0.5) < 1e-9  # below 25 m/s: uncapped
     small = -0.03 * capped.K(40.0)
     assert abs(capped.steer_for(small, 40.0) - 0.03) < 1e-9
+
+
+def test_scrub_off_by_default_and_conservative_chords():
+    import json, os
+    from vehicle import Vehicle
+    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
+    p.pop("scrub", None)
+    assert Vehicle(p).scrub(25.0) == 0.0 and Vehicle(p).scrub_chords() == [(0.0, 0.0)]
+    p["scrub"] = {"x": [0, 10, 20, 30], "s": [0, 0.5, 2.2, 6.0]}
+    v = Vehicle(p)
+    for x, y in ((0, 0), (10, 0.5), (20, 2.2), (30, 6.0)):
+        assert abs(v.scrub(x) - y) < 1e-9  # passes through the fitted points
+    assert abs(v.scrub(15) - 1.35) < 1e-9  # linear between them
+    assert v.scrub(5) >= 0.25 - 1e-9

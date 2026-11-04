@@ -257,7 +257,7 @@ def test_ellipse_couples_braking_and_lateral():
     assert worst <= 1.08  # tangent polygon at 30/60 deg + linearised v^2: outer bound ~7 %
     m0, raw0, _ = braking_corner_solves(BASE, ticks=150, x0=x0)
     worst0 = max(ellipse_use(m0, z)[0][ellipse_use(m0, z)[1]].max(initial=0) for z in raw0)
-    assert worst0 > 1.2  # without the rows the plan exceeds the ellipse
+    assert worst0 > 1.15  # without the rows the plan exceeds the ellipse (shipped brake_ellipse_c 1.3 lowers this)
 
 
 def test_options_deterministic_and_fast():

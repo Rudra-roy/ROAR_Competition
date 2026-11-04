@@ -207,7 +207,7 @@ class FrenetMPC:
             return self._fallback(x0, kr[0], vr[0], al_raw[0])  # never let a NaN into the solver
         ks = np.array([veh.K(x) for x in vl[:N]])
         a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]])  # = a_min unless brake_model makes it v-dependent
-        ad = np.maximum([veh.a_drive(x) for x in vl[:N]], a_lo)
+        ad = np.maximum([veh.a_drive(x) - veh.scrub(x * x * abs(k)) for x, k in zip(vl[:N], kr)], a_lo)
         vt = np.maximum(vl[:N], V_TAN_MIN)
 
         self.vals[self.vidx] = -dt * vl[:N, None]

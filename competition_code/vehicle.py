@@ -64,6 +64,21 @@ class Vehicle:
     def a_drive(self, v):
         return min(a - b * v * v for a, b in self.p["a_drive_lines"])
 
+    def scrub_chords(self):
+        """Tyre scrub: cornering at lateral accel x costs S(x) of the drive accel (fitted at full throttle,
+        tools/fit_scrub.py). Returned as secant chords [(m, c)], S(x) <= max_j(m_j x + c_j) (convex, conservative);
+        [(0, 0)] when the model is off."""
+        sc = self.p.get("scrub")
+        if not sc:
+            return [(0.0, 0.0)]
+        x = np.asarray(sc["x"], float)
+        y = np.asarray(sc["s"], float)
+        m = np.diff(y) / np.diff(x)
+        return [(0.0, 0.0)] + [(float(mi), float(yi - mi * xi)) for mi, xi, yi in zip(m, x[:-1], y[:-1])]
+
+    def scrub(self, a_lat_abs):
+        return max(max(m * a_lat_abs + c for m, c in self.scrub_chords()), 0.0)
+
     def kappa_max(self, v):
         v = max(v, 1.0)
         return min(self.K(v), self.a_lat_max / (v * v))

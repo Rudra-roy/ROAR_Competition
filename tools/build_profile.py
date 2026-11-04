@@ -43,9 +43,11 @@ def build_profile(track, veh, start_s, laps=3, grid=2.0):
     th = np.radians([15, 30, 45, 60, 75]) if c_el else np.zeros(0)
     brk_rows = [[-1.0, 0, 0, 0]] if bl is None else [[-1.0, -d, 0, 0] for _, d in bl]
     brk_g = [a_brk] if bl is None else [c for c, _ in bl]
-    F_base = np.array([[1.0, b, 0, 0] for _, b in lines] + brk_rows + [[0, 0, 1, 0], [0, 0, -1, 0], [0, 1, 0, 0]],
-                      float)
-    g_fixed = [a for a, _ in lines] + brk_g
+    # Drive side with tyre scrub: a_long <= (a - b v^2) - (m |a_lat| + c) for every drive line x scrub chord.
+    ch = veh.scrub_chords()
+    F_base = np.array([[1.0, b, 0, m] for _, b in lines for m, _ in ch] + brk_rows +
+                      [[0, 0, 1, 0], [0, 0, -1, 0], [0, 1, 0, 0]], float)
+    g_fixed = [a - c for a, _ in lines for _, c in ch] + brk_g
     vmax2 = veh.p["v_max"] ** 2
 
     def solve(A):  # A(q): ellipse normaliser, or None = box only
