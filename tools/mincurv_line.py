@@ -227,7 +227,9 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
     nrm = np.c_[-dy, dx] / np.hypot(dx, dy)[:, None]  # left normal
     tr = Track(old_xy, tck=tck)
     ls = np.array([tr.project(p)[1] for p in base])
-    w, kw = window_weight(ls, tr.length)
+    wins = [wi for wi, fi in zip(WINDOWS, factors) if fi > 0]  # a 0-factor corner is not touched at all
+    fac = np.array([fi for fi in factors if fi > 0], float)
+    w, kw = window_weight(ls, tr.length, wins)
     st, lo, hi, _, _ = envelope(old_xy, s25_xy, centre)
     Lc = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
     sc, dc = station(base, centre)
@@ -237,9 +239,9 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
     lo_p = np.minimum(np.maximum(np.interp(sc, st, lo, period=Lc), -cap) - dc, 0)
     hi_p = np.maximum(np.minimum(np.interp(sc, st, hi, period=Lc), cap) - dc, 0)
     new = qp_offsets(base, nrm, w * lo_p, w * hi_p)[0]
-    f = np.where(kw >= 0, np.asarray(factors, float)[kw], 0.0)
+    f = np.where(kw >= 0, fac[np.maximum(kw, 0)], 0.0) if len(fac) else np.zeros(len(ls))
     new = base + f[:, None] * (new - base)
-    patch = window_weight(ls, tr.length, blend=BLEND + MARGIN)[0] > 0
+    patch = window_weight(ls, tr.length, wins, blend=BLEND + MARGIN)[0] > 0
     return np.where(patch[:, None], new, old_xy), patch_spline(tck, u, new, patch, KNOT_DS / chord)
 
 

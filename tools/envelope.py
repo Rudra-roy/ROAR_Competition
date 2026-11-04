@@ -95,6 +95,15 @@ def outside(car_xy, st, lo, hi, centre):
     return np.maximum(0.0, np.maximum(d - b, a - d))
 
 
+def outward(car_xy, st, lo, hi, centre):
+    """Per car point: metres further from the centreline than the bounds reach on its side (0 when the car is inside
+    them or nearer the centreline). The binding part of the car rule: never further out than anyone drove."""
+    L = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
+    s, d = station(car_xy, centre)
+    a, b = np.interp(s, st, lo, period=L), np.interp(s, st, hi, period=L)
+    return np.where(d > 0, np.maximum(0.0, d - np.maximum(b, 0)), np.maximum(0.0, np.minimum(a, 0) - d))
+
+
 def load_xy(hud_csv):
     d = np.genfromtxt(hud_csv, delimiter=",", names=True)
     return np.c_[d["x"], d["y"]]
@@ -110,15 +119,17 @@ def main(argv):
             files.append(a)
     centre = np.load(os.path.join(DATA, "centreline.npy"))
     st, lo, hi = check_bounds(np.load(line)["xy"], [load_xy(S25_HUD)] + [load_xy(f) for f in E115_RUNS], centre)
-    print("| run | max beyond car bounds m @ centreline | ticks > 0.05 m | max abs(d) @ centreline |")
-    print("|---|---|---|---|")
+    print("| run | max beyond car bounds m @ centreline | ticks > 0.05 m | max further out m @ centreline "
+          "| max abs(d) @ centreline |")
+    print("|---|---|---|---|---|")
     for f in files:
         xy = load_xy(f)
         ex = outside(xy, st, lo, hi, centre)
         s, d = station(xy, centre)
-        k, j = int(np.argmax(ex)), int(np.argmax(np.abs(d)))
-        print("| %s | %.2f @ %.0f | %d | %.2f @ %.0f |" % (os.path.basename(f), ex[k], s[k], int((ex > 0.05).sum()),
-                                                     abs(d[j]), s[j]))
+        out = outward(xy, st, lo, hi, centre)
+        k, j, o = int(np.argmax(ex)), int(np.argmax(np.abs(d))), int(np.argmax(out))
+        print("| %s | %.2f @ %.0f | %d | %.2f @ %.0f | %.2f @ %.0f |" % (
+            os.path.basename(f), ex[k], s[k], int((ex > 0.05).sum()), out[o], s[o], abs(d[j]), s[j]))
 
 
 if __name__ == "__main__":

@@ -74,3 +74,13 @@ def test_check_bounds_union_of_driven_paths_widened_to_the_centre_side():
         st, lo, hi = check_bounds(_circle(R, -d_ours), [_circle(R, -d_s25, n=2000, laps=1.1),
                                                         _circle(R, -d_car, n=2500, laps=1.1)], CENTRE)
         assert np.allclose(lo, want[0], atol=0.03) and np.allclose(hi, want[1], atol=0.03)
+
+
+def test_outward_counts_only_moves_away_from_the_centreline():
+    """Bounds [+1, +2] (d > 0 side): a car at +2.4 is 0.4 m further out; at +0.5 it is 0.5 m outside the interval but
+    on the centre side (not further out); at -0.3 it is 0.3 m out on the other side, where nobody went."""
+    from envelope import outward
+    st = np.r_[0.0, np.cumsum(np.linalg.norm(np.roll(CENTRE, -1, 0) - CENTRE, axis=1))[:-1]]
+    lo, hi = np.full(len(st), 1.0), np.full(len(st), 2.0)
+    for d, want in ((2.4, 0.4), (0.5, 0.0), (-0.3, 0.3), (1.5, 0.0)):
+        assert np.allclose(outward(_circle(R, -d, n=900), st, lo, hi, CENTRE), want, atol=0.02)
