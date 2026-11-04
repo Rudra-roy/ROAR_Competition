@@ -168,3 +168,24 @@ def test_shipped_line_is_the_tool_output(tmp_path):
     mincurv_line.main(out, widen=np.load(envelope.LINE_8E)["xy"], factors=mincurv_line.SHIP_FACTORS)
     a, b = np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz"))
     assert sorted(a.files) == sorted(b.files) and all(np.array_equal(a[k], b[k]) for k in a.files)
+
+
+def test_full_width_widening_respects_caps_and_moves_only_windows():
+    import mincurv_line as ml
+    from envelope import S25_HUD, load_xy
+    from export_line import offsets
+    centre = np.load(os.path.join(ml.DATA, "centreline.npy"), allow_pickle=False)
+    old = np.load(os.path.join(ml.ROOT, "tools", "line_e115.npz"))["xy"]
+    caps = [4.4, 4.0, 4.6, 4.2, 4.6, 4.6, 4.6]
+    xy, tck = ml.widen_corners(old, centre, load_xy(S25_HUD), [1.0] * 7, ml.WINDOWS_ALL, True, caps)
+    tr = ml.Track(xy, tck=tck)
+    d = offsets(tr.xy, centre)[0]
+    w, k = ml.window_weight(tr.s, tr.length, ml.WINDOWS_ALL, blend=ml.BLEND + ml.MARGIN)
+    for j, c in enumerate(caps):
+        inside = (k == j) & (w > 0.99)
+        if inside.any():
+            assert np.abs(d[inside]).max() <= c + 0.05, (j, np.abs(d[inside]).max())
+    told = ml.Track(old)
+    far = w == 0
+    moved = np.array([abs(told.project(p)[2]) for p in tr.xy[far][::25]])
+    assert moved.max() < 0.02  # untouched outside the windows

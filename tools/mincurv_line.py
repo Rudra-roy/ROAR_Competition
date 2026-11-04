@@ -59,6 +59,10 @@ WINDOWS = [(780.0, 1060.0), (1600.0, 1780.0), (3720.0, 3860.0), (5240.0, 5500.0)
 # Raced (Task 8h): the car slid further out than any driven path with c937 (0.5: +0.85 m at its exit) and c3835 (1.0:
 # +0.9 m, 0.5: +0.56 m); c1697 is pinned at its apex by the envelope (S25 only ~0.3 m wider). Shipped: hairpin only.
 SHIP_FACTORS = (0.0, 0.0, 0.0, 1.0)
+# every corner (c1329, the c2695/2812/2899 complex and c3993/c4113 added), for --full-width: bounds = the corridor
+# edges minus the car, per-window caps (--caps) that the race loop lowers 0.2 m at the corner that collided
+WINDOWS_ALL = [(780.0, 1060.0), (1250.0, 1420.0), (1600.0, 1780.0), (2540.0, 2960.0), (3720.0, 3860.0),
+               (3930.0, 4160.0), (5240.0, 5500.0)]
 TEST_FACTORS = (1.0, 0.0, 1.0, 1.0)  # the tool's tests: every corner whose min radius the envelope lets rise
 BLEND = 60.0  # m, cosine ramp of the free band each side of a window
 KNOT_DS = 6.0  # m, spline knot spacing inside the windows (the old fit has ~20-45 m knots there)
@@ -214,7 +218,8 @@ def patch_spline(tck, u, target, free, knot_ds_u):
     return t, c, k
 
 
-def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
+def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS, full_width=False,
+                  caps=None):
     """-> (points, tck). The QP runs on the old line as the car follows it (its own smoothing spline sampled at each
     point's parameter, not the noisy points): min-curvature offsets along its normals, free only in the WINDOWS
     (cosine blended), within the proven envelope; window j's shift scaled by factors[j]. The spline is the old fit
@@ -231,17 +236,27 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
     nrm = np.c_[-dy, dx] / np.hypot(dx, dy)[:, None]  # left normal
     tr = Track(old_xy, tck=tck)
     ls = np.array([tr.project(p)[1] for p in base])
-    wins = [wi for wi, fi in zip(WINDOWS, factors) if fi > 0]  # a 0-factor corner is not touched at all
+    keep = [fi > 0 for fi in factors]  # a 0-factor corner is not touched at all
+    wins = [wi for wi, k in zip(windows, keep) if k]
     fac = np.array([fi for fi in factors if fi > 0], float)
+    capw = np.array([c for c, k in zip(caps if caps is not None else [MAX_OFFSET] * len(windows), keep) if k], float)
     w, kw = window_weight(ls, tr.length, wins)
-    st, lo, hi, _, _ = envelope(old_xy, s25_xy, centre, shrink=ENV_SHRINK, cap=MAX_OFFSET)
     Lc = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
     sc, dc = station(base, centre)
-    # allowed change of the centreline offset (|d| <= MAX_OFFSET - SLACK, never forcing the old line to move); a move
-    # a along the line normal changes it by a*cos(heading gap) <= a
-    cap = MAX_OFFSET - SLACK
-    lo_p = np.minimum(np.maximum(np.interp(sc, st, lo, period=Lc), -cap) - dc, 0)
-    hi_p = np.maximum(np.minimum(np.interp(sc, st, hi, period=Lc), cap) - dc, 0)
+    if full_width:  # the road itself: edges minus the car (+ YAW_ALLOW), then the per-window caps
+        left, right, _ = edges_from_waypoints()
+        margin = HALF_W + YAW_ALLOW
+        lo = -(np.abs(signed_offset(base, right)) - margin)
+        hi = np.abs(signed_offset(base, left)) - margin
+        cap = np.where(kw >= 0, capw[np.maximum(kw, 0)], MAX_OFFSET) - SLACK
+    else:
+        st, lo_s, hi_s, _, _ = envelope(old_xy, s25_xy, centre, shrink=ENV_SHRINK, cap=MAX_OFFSET)
+        lo, hi = np.interp(sc, st, lo_s, period=Lc), np.interp(sc, st, hi_s, period=Lc)
+        cap = MAX_OFFSET - SLACK
+    # allowed change of the centreline offset (|d| <= cap, never forcing the old line to move); a move a along the
+    # line normal changes it by a*cos(heading gap) <= a
+    lo_p = np.minimum(np.maximum(lo, -cap) - dc, 0)
+    hi_p = np.maximum(np.minimum(hi, cap) - dc, 0)
     new = qp_offsets(base, nrm, w * lo_p, w * hi_p)[0]
     f = np.where(kw >= 0, fac[np.maximum(kw, 0)], 0.0) if len(fac) else np.zeros(len(ls))
     new = base + f[:, None] * (new - base)
@@ -264,15 +279,16 @@ def remap_sections(old_xy, new_xy, sections):
     return [[s1, a] for s1, _, a in rows]
 
 
-def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.0, 1.0)):
+def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS,
+         full_width=False, caps=None):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
     tck = None
     dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(),  # noqa: E731
                              np.abs(offsets(Track(xy, tck=tck).xy, centre)[0]).max())
     if widen is not None:
         from envelope import S25_HUD, load_xy
-        xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors)
-        mode = "widen %s" % ",".join("%g" % f for f in factors)
+        xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors, windows, full_width, caps)
+        mode = "widen %s%s" % (",".join("%g" % f for f in factors), " full-width caps %s" % caps if full_width else "")
         dmax = dmax_of(xy)
     elif straights is not None:  # no slack in this mode: the bounds come from the raced line
         xy, mode = smooth_straights(straights, centre), "straights"
@@ -313,7 +329,15 @@ if __name__ == "__main__":
     ap.add_argument("--max-offset", type=float, default=MAX_OFFSET,
                     help="centreline cap (user lifted the 4.0 m cap 2026-11-04; the proven envelope still bounds it)")
     ap.add_argument("--shrink", type=float, default=ENV_SHRINK)
+    ap.add_argument("--all-corners", action="store_true", help="use WINDOWS_ALL (7 corners)")
+    ap.add_argument("--full-width", action="store_true", help="bounds = the road edges minus the car, not the envelope")
+    ap.add_argument("--caps", help="per-window |d_centre| caps, m (full-width mode)")
     a = ap.parse_args()
     MAX_OFFSET, ENV_SHRINK = a.max_offset, a.shrink
+    wins = WINDOWS_ALL if a.all_corners else WINDOWS
+    facs = [float(x) for x in a.factors.split(",")]
+    if len(facs) != len(wins):
+        facs = [1.0] * len(wins)
+    caps = [float(x) for x in a.caps.split(",")] if a.caps else None
     main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], a.widen and np.load(a.widen)["xy"],
-         [float(x) for x in a.factors.split(",")])
+         facs, wins, a.full_width, caps)
