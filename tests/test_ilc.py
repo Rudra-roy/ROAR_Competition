@@ -39,3 +39,10 @@ def test_lap_error_uses_flying_laps(tmp_path):
     g = np.arange(0, L, 1.0)
     e = ilc.lap_error(str(f), g, L)
     assert np.abs(e - np.sin(2 * np.pi * g / L)).max() < 0.02
+
+
+def test_target_pulls_in_only_beyond_cap():
+    o = np.array([0.0, 3.0, 3.8, 3.95, -3.9, -4.2])
+    t = ilc.target(o, cap=3.8)
+    assert np.allclose(t, [0, 0, 0, -0.15, 0.1, 0.4])
+    assert np.all(np.abs(o + t) <= 3.8 + 1e-12)
