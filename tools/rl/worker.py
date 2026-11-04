@@ -123,20 +123,22 @@ class Env:
         sol.u_prev = (float(sol.mpc.ty.steady(np.interp(s_car, self.track.s, self.track.kappa, period=L),
                                               float(np.linalg.norm(vel)))[0]), 0.0)
         dist = (s1 - s0) % L
+        off0 = (s_car - s0 + L / 2) % L - L / 2
         t, ticks = 0.0, 0
         while True:
             await veh.receive_observation()
-            if np.linalg.norm(self.col.get_last_observation().impulse_normal) > 100.0:
-                return t, True, 0.0
+            imp = float(np.linalg.norm(self.col.get_last_observation().impulse_normal))
+            if imp > 100.0:
+                return t, True, imp, (sol.progress._total - target_total - off0) / dist
             await sol.step()
             await w.step()
             ticks += 1
             t = ticks * DT
-            done = sol.progress._total - target_total - ((s_car - s0 + L / 2) % L - L / 2)
+            done = sol.progress._total - target_total - off0
             if done >= dist:
-                return t, False, float(np.linalg.norm(self.vel.get_last_gym_observation()))
+                return t, False, 0.0, 1.0
             if t > TIMEOUT_S or (t > 3 and np.linalg.norm(self.vel.get_last_gym_observation()) < 3.0):
-                return TIMEOUT_S, True, 0.0
+                return TIMEOUT_S, True, 0.0, done / dist
 
 
 def kill_stale():
@@ -161,15 +163,15 @@ async def main():
     print(json.dumps({"ready": SLOT}), flush=True)
     for line in sys.stdin:
         job = json.loads(line)
-        times, coll, exit_v = [], [], []
+        times, coll, imp, frac = [], [], [], []
         for s0, s1 in job["episodes"]:
             try:
-                t, c, ve = await env.episode(job.get("weights"), s0, s1)
+                t, c, i, f = await env.episode(job.get("weights"), s0, s1)
             except Exception as e:  # keep the worker alive; a failed episode scores as a collision
                 log("episode failed: %r" % e)
-                t, c, ve = TIMEOUT_S, True, 0.0
-            times.append(t), coll.append(bool(c)), exit_v.append(ve)
-        print(json.dumps({"times": times, "coll": coll, "exit_v": exit_v}), flush=True)
+                t, c, i, f = TIMEOUT_S, True, 0.0, 0.0
+            times.append(t), coll.append(bool(c)), imp.append(i), frac.append(float(f))
+        print(json.dumps({"times": times, "coll": coll, "impulse": imp, "frac": frac}), flush=True)
     kill_stale()  # stdin closed: take the server down with us
 
 

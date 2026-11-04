@@ -23,10 +23,13 @@ PARENT = os.path.dirname(ROOT)
 sys.path.insert(0, os.path.join(ROOT, "competition_code"))
 from submission import RESIDUAL_AHEAD_M  # noqa: E402
 
-CUTS = [660.0, 1130.0, 1480.0, 2420.0, 3600.0, 3810.0, 5120.0]  # line_s, 120 m before each corner's braking zone
+CUTS = [660.0, 1130.0, 1480.0, 2420.0, 3600.0, 5120.0]  # line_s on straights, ~120 m before each braking zone
+# (the bottom curve c3835 + c3993-4113 is one segment: a cut inside it started the car mid-slide and it crashed)
 SEGMENTS = [[a, b] for a, b in zip(CUTS, CUTS[1:] + CUTS[:1])]
 NF, NH = 7 + len(RESIDUAL_AHEAD_M), 16
-COLL_PEN = 20.0
+COLL_PEN0, COLL_PEN_MIN, COLL_PEN_MAX = 5.0, 2.0, 80.0
+TARGET_COLL_RATE = (0.30, 0.10)  # population crash rate the penalty steers toward: early (exploring) -> mature
+MATURE_GENS = 30
 SHAPES = [("W1", (NH, NF)), ("b1", (NH,)), ("W2", (2, NH)), ("b2", (2,))]
 
 
@@ -86,8 +89,37 @@ def evaluate(workers, thetas):
     return res
 
 
-def fitness(r):
-    return -sum(r["times"]) - COLL_PEN * sum(r["coll"])
+class Reward:
+    """Evolving reward. A crash costs pen * (1 + severity) plus the rest of the segment at the baseline pace (so
+    crashing later beats crashing sooner: a gradient even when everything crashes); severity = min(impulse / 2000, 2),
+    a scrape vs a hard hit. pen adapts every generation toward a target population crash rate that tightens as the
+    model matures (0.30 -> 0.10 over MATURE_GENS generations, counted only while the policy improves): early on
+    crashes are cheap enough to explore near the limit, later they dominate."""
+
+    def __init__(self, base_times, pen=COLL_PEN0, gen=0):
+        self.base = np.asarray(base_times, float)
+        self.pen, self.gen = pen, gen
+
+    def __call__(self, r):
+        t = np.asarray(r["times"], float)
+        c = np.asarray(r["coll"], bool)
+        frac = np.clip(np.asarray(r.get("frac", [1.0] * len(t)), float), 0.0, 1.0)
+        sev = np.minimum(np.asarray(r.get("impulse", [0.0] * len(t)), float) / 2000.0, 2.0)
+        rest = np.where(c, (1.0 - frac) * self.base, 0.0)
+        cost = self.pen * (1.0 + sev) * (0.5 + 0.5 * (1.0 - frac))  # the earlier in the segment, the dearer
+        return -(t.sum() + rest.sum() + (cost * c).sum())
+
+    def target(self):
+        a, b = TARGET_COLL_RATE
+        return a + (b - a) * min(self.gen / MATURE_GENS, 1.0)
+
+    def adapt(self, crash_rate, improving):
+        if crash_rate > self.target():
+            self.pen = min(self.pen * 1.3, COLL_PEN_MAX)
+        elif crash_rate < 0.5 * self.target():
+            self.pen = max(self.pen * 0.9, COLL_PEN_MIN)
+        if improving:
+            self.gen += 1
 
 
 def main():
@@ -109,6 +141,7 @@ def main():
         st = np.load(st_f)
         theta, m, v, g0, best = st["theta"], st["m"], st["v"], int(st["gen"]) + 1, float(st["best"])
         rng = np.random.default_rng(g0)
+        reward = Reward(st["base"], float(st["pen"]), int(st["mat"]))
     else:
         theta = rng.normal(0, 0.3, n)
         theta[-(2 * NH + 2):] = 0.0  # output layer zero: the policy starts as "no correction"
@@ -122,12 +155,15 @@ def main():
             print("baseline (policy off): %.2f s, coll %d, segments %s" % (sum(base["times"]), sum(base["coll"]),
                                                                         np.round(base["times"], 2).tolist()), flush=True)
             lw.writerow(["base", sum(base["times"]), sum(base["coll"]), json.dumps(base["times"])])
+            if any(base["coll"]):
+                raise RuntimeError("the baseline crashes in a segment: fix the segment cuts first")
+            reward = Reward(base["times"])
         for g in range(g0, g0 + a.gens):
             t0 = time.time()
             eps = rng.normal(0, 1, (a.pop // 2, n))
             thetas = [theta] + [theta + a.sigma * e for e in eps] + [theta - a.sigma * e for e in eps]
             rs = evaluate(workers, thetas)
-            f = np.array([fitness(r) for r in rs])
+            f = np.array([reward(r) for r in rs])
             f_mean, fp, fm = f[0], f[1:1 + len(eps)], f[1 + len(eps):]
             ranks = np.argsort(np.argsort(np.r_[fp, fm])) / (2 * len(eps) - 1) - 0.5
             grad = ((ranks[:len(eps)] - ranks[len(eps):])[:, None] * eps).sum(0) / (len(eps) * a.sigma)
@@ -136,15 +172,20 @@ def main():
             theta = theta + a.lr * (m / (1 - 0.9 ** (g + 1))) / (np.sqrt(v / (1 - 0.999 ** (g + 1))) + 1e-8)
             r0 = rs[0]
             clean0 = not any(r0["coll"])
-            if clean0 and f_mean > best:
-                best = f_mean
+            crash_rate = float(np.mean([any(r["coll"]) for r in rs[1:]]))
+            improving = clean0 and -sum(r0["times"]) > best
+            if improving:
+                best = -sum(r0["times"])
                 np.savez(os.path.join(out, "best.npz"), **{k: np.array(x) for k, x in unflat(thetas[0]).items()})
-            print("gen %3d: mean %.2f s (coll %d) | pop best %.2f s | pop coll %d | best clean %.2f | %.0f s" % (
-                g, -f_mean if clean0 else sum(r0["times"]), sum(r0["coll"]), -max(f[1:]),
-                sum(sum(r["coll"]) for r in rs[1:]), -best, time.time() - t0), flush=True)
-            lw.writerow([g, sum(r0["times"]), sum(r0["coll"]), json.dumps(r0["times"]), -max(f[1:])])
+            print("gen %3d: mean %.2f s (coll %d) | pop best %.2f | crash rate %.2f (target %.2f) | penalty %.1f | "
+                  "maturity %d | best clean %.2f | %.0f s" % (g, sum(r0["times"]), sum(r0["coll"]), -max(f[1:]),
+                                                            crash_rate, reward.target(), reward.pen, reward.gen,
+                                                            -best, time.time() - t0), flush=True)
+            lw.writerow([g, sum(r0["times"]), sum(r0["coll"]), json.dumps(r0["times"]), -max(f[1:]), crash_rate,
+                         reward.pen, reward.gen])
             log.flush()
-            np.savez(st_f, theta=theta, m=m, v=v, gen=g, best=best)
+            reward.adapt(crash_rate, improving)
+            np.savez(st_f, theta=theta, m=m, v=v, gen=g, best=best, base=reward.base, pen=reward.pen, mat=reward.gen)
     finally:
         for w in workers:
             w.close()
