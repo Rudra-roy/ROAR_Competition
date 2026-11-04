@@ -55,7 +55,10 @@ ITERS = 4
 # corner windows, line_s of the 8e/e115 line (racing_line.npz at 8d1f3a4): braking point (plan's top speed) -> exit
 # (|kappa| back to straight); names = corner_compare sectors c937 chicane, c1697, c3835, c5413 hairpin
 WINDOWS = [(780.0, 1060.0), (1600.0, 1780.0), (3720.0, 3860.0), (5240.0, 5500.0)]
-SHIP_FACTORS = (1.0, 0.0, 1.0, 1.0)  # c1697 off: S25 runs only ~0.3 m wider at its apex, so the envelope pins it there
+# Raced (Task 8h): the car slid further out than any driven path with c937 (0.5: +0.85 m at its exit) and c3835 (1.0:
+# +0.9 m, 0.5: +0.56 m); c1697 is pinned at its apex by the envelope (S25 only ~0.3 m wider). Shipped: hairpin only.
+SHIP_FACTORS = (0.0, 0.0, 0.0, 1.0)
+TEST_FACTORS = (1.0, 0.0, 1.0, 1.0)  # the tool's tests: every corner whose min radius the envelope lets rise
 BLEND = 60.0  # m, cosine ramp of the free band each side of a window
 KNOT_DS = 6.0  # m, spline knot spacing inside the windows (the old fit has ~20-45 m knots there)
 MARGIN = 40.0  # m beyond the blend: spline patch with the old curve as target (room to meet its coefficients)

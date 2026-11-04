@@ -96,7 +96,7 @@ def widened(old_line, tmp_path_factory):
     d = tmp_path_factory.mktemp("w")
     mincurv_line.main(str(d / "e8.npz"), straights=old_line)
     e8 = np.load(d / "e8.npz")["xy"]
-    mincurv_line.main(str(d / "w.npz"), widen=e8, factors=mincurv_line.SHIP_FACTORS)
+    mincurv_line.main(str(d / "w.npz"), widen=e8, factors=mincurv_line.TEST_FACTORS)
     return e8, load_track(str(d / "w.npz")), np.load(d / "w.npz")["xy"]
 
 
@@ -108,7 +108,7 @@ def _on(tn, to, sel):
 
 
 def _active():
-    return [wi for wi, f in zip(mincurv_line.WINDOWS, mincurv_line.SHIP_FACTORS) if f > 0]
+    return [wi for wi, f in zip(mincurv_line.WINDOWS, mincurv_line.TEST_FACTORS) if f > 0]
 
 
 def test_widen_pins_the_line_outside_the_windows(widened):
@@ -157,3 +157,14 @@ def test_widen_closed_and_no_kinks(widened):
     _, tn, _ = widened
     assert np.linalg.norm(tn.xy[0] - tn.xy[-1]) < 1.5 * tn.ds
     assert np.abs(kink_metric(tn)).max() < KINK_THR
+
+
+def test_shipped_line_is_the_tool_output(tmp_path):
+    """competition_code/data/racing_line.npz == mincurv_line --widen tools/line_e115.npz --factors SHIP_FACTORS."""
+    import envelope
+    if not os.path.exists(envelope.S25_HUD):
+        pytest.skip("S25 HUD log not found")
+    out = str(tmp_path / "s.npz")
+    mincurv_line.main(out, widen=np.load(envelope.LINE_8E)["xy"], factors=mincurv_line.SHIP_FACTORS)
+    a, b = np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz"))
+    assert sorted(a.files) == sorted(b.files) and all(np.array_equal(a[k], b[k]) for k in a.files)
