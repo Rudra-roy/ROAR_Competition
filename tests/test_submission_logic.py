@@ -242,3 +242,19 @@ def test_pursuit_section_mask():
     assert sol._pp_on(to_total(0.5 * (s4 + s5)), pp)
     assert not sol._pp_on(to_total(s4 - 5.0), pp)
     assert sol._pp_on(0.0, {})  # no mask: everywhere
+
+
+def test_residual_policy_bounded_and_off_by_default(tmp_path):
+    from submission import RESIDUAL_AHEAD_M, RESIDUAL_SCALE, ResidualPolicy
+    nf = 7 + len(RESIDUAL_AHEAD_M)
+    rng = np.random.default_rng(0)
+    f = tmp_path / "res.npz"
+    np.savez(f, W1=rng.normal(0, 5, (16, nf)), b1=np.zeros(16), W2=rng.normal(0, 5, (2, 16)), b2=np.zeros(2))
+    pol = ResidualPolicy(str(f))
+    for _ in range(50):
+        dd, da = pol(rng.normal(0, 3, nf))
+        assert abs(dd) <= RESIDUAL_SCALE[0] + 1e-12 and abs(da) <= RESIDUAL_SCALE[1] + 1e-12
+    np.savez(f, W1=np.zeros((16, nf)), b1=np.zeros(16), W2=np.zeros((2, 16)), b2=np.zeros(2))
+    assert ResidualPolicy(str(f))(np.ones(nf)) == (0.0, 0.0)
+    sol, *_ = _sol()
+    assert sol.residual is None  # no data/residual.npz shipped: off

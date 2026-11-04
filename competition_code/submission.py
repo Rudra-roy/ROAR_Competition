@@ -25,6 +25,29 @@ START_S_TOL_M = 5.0
 
 def _wrap(a):
     return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+RESIDUAL_AHEAD_M = (0.0, 20.0, 40.0, 60.0)  # curvature samples ahead of the car for the residual policy
+RESIDUAL_SCALE = (0.03, 4.0)  # max |correction|: steer angle (rad), accel (m/s^2)
+
+
+class ResidualPolicy:
+    """Learned correction on top of the MPC (tools/rl/train_es.py): a tanh MLP from the car's state to
+    (d_delta, d_accel), each bounded by RESIDUAL_SCALE. Weights in data/residual.npz (W1, b1, W2, b2); absent = off."""
+
+    def __init__(self, path):
+        f = np.load(path)
+        self.W1, self.b1, self.W2, self.b2 = (np.asarray(f[k], float) for k in ("W1", "b1", "W2", "b2"))
+
+    @staticmethod
+    def features(v, beta, r, e_y, e_psi, kappas, a_cmd, delta):
+        return np.array([v / 50.0, beta * 10.0, r, e_y, e_psi * 10.0, *(np.asarray(kappas) * 50.0), a_cmd / 10.0,
+                         delta * 10.0])
+
+    def __call__(self, x):
+        h = np.tanh(self.W1 @ x + self.b1)
+        o = np.tanh(self.W2 @ h + self.b2)
+        return o[0] * RESIDUAL_SCALE[0], o[1] * RESIDUAL_SCALE[1]
 # The learned offset is fitted on flying laps; from the standing start the car is slower and drifts differently
 # (s45_1 lap 1: 0.73 m flying-lap offset sent the car 4.10 m off centre at line_s 218), so fade it in.
 OFFSET_FADE_M = (200.0, 1000.0)  # s_total over which the offset ramps 0 -> 1 after a (re)start
@@ -74,6 +97,8 @@ class RoarCompetitionSolution:
         # "model": "tyre" = slip-aware MPC (tyre_mpc.py, needs vehicle_params["tyre"]); else the kinematic FrenetMPC
         self.tyre = veh.p["mpc"].get("model") == "tyre"
         self._e_y0 = None  # lateral offset at the (re)start, blended out over START_BLEND_M
+        rp = os.path.join(DATA, "residual.npz")
+        self.residual = ResidualPolicy(rp) if os.path.exists(rp) else None
         bp = veh.p.get("pedal_binary")  # {"dwell": ticks, "ay_min": m/s^2}: on/off pedals in corners and braking
         self._binary = BinaryPedals(veh, bp.get("dwell", 3), bp.get("ay_min", 8.0)) if bp else None
         self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else \
@@ -204,6 +229,11 @@ class RoarCompetitionSolution:
             pp = self.veh.p.get("pursuit")
             if pp and "la_m" in pp and self._pp_on(s_total, pp):  # hybrid: pursuit steering, the MPC keeps the pedals
                 kappa = self._pursuit_delta(p[:2], yaw, s_total, v, pp)
+            if self.residual is not None and ok:
+                ks = [self._kappa_cmd_ref(s_total + d) for d in RESIDUAL_AHEAD_M]
+                dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa))
+                g = self.mpc.ty.g(v)
+                kappa, a = float(np.clip(kappa + dd, -g, g)), a + da
             self.u_prev = (kappa, a)
             steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))
         else:
