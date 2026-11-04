@@ -139,7 +139,22 @@ class Env:
                 return TIMEOUT_S, True, 0.0
 
 
+def kill_stale():
+    """A server left on this slot's port by an earlier worker (Proton re-sessions it, so it can outlive us)."""
+    import signal
+    me = os.getpid()
+    for pid in os.listdir("/proc"):
+        if pid.isdigit() and int(pid) != me:
+            try:
+                if ("carla-rpc-port=%d" % PORT).encode() in open("/proc/%s/cmdline" % pid, "rb").read():
+                    os.kill(int(pid), signal.SIGKILL)
+            except OSError:
+                pass
+    time.sleep(3)
+
+
 async def main():
+    kill_stale()
     start_server()
     env = Env()
     log("worker %d ready on %d" % (SLOT, PORT))
@@ -155,6 +170,7 @@ async def main():
                 t, c, ve = TIMEOUT_S, True, 0.0
             times.append(t), coll.append(bool(c)), exit_v.append(ve)
         print(json.dumps({"times": times, "coll": coll, "exit_v": exit_v}), flush=True)
+    kill_stale()  # stdin closed: take the server down with us
 
 
 if __name__ == "__main__":
