@@ -199,3 +199,19 @@ def test_corner_throttle_floor_uses_the_pedal_instead_of_engine_braking():
     assert t2 > 0.5 and b2 == 0.0  # mild decel: throttle alone, above the floor
     t3, b3 = v.pedals_for(-19.0, 50.0, 25.0)
     assert b3 == 1.0 and 0.0 <= t3 < 0.5  # beyond full pedal: throttle comes down
+
+
+def test_corner_throttle_floor_per_section():
+    import json, os
+    from vehicle import Vehicle
+    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
+    n = len(p["a_lat_sections"])
+    p["corner_throttle_floor"] = {"thr": 0.5, "ay_min": 8.0, "thr_sec": [0.5] * n}
+    p["corner_throttle_floor"]["thr_sec"][7] = 0.2
+    p["corner_throttle_floor"]["thr_sec"][2] = 0.8
+    v = Vehicle(p)
+    s7, s8, s2, s3 = (p["a_lat_sections"][i][0] for i in (7, 8, 2, 3))
+    assert v.pedals_for(-14.0, 50.0, 25.0, 0.5 * (s7 + s8))[0] == 0.2
+    assert v.pedals_for(-7.0, 50.0, 25.0, 0.5 * (s2 + s3))[0] == 0.8  # the pedal can supply the 5 m/s^2 difference
+    assert v.pedals_for(-14.0, 50.0, 25.0, s7 - 5.0)[0] == 0.5
+    assert v.pedals_for(-14.0, 50.0, 25.0)[0] == 0.5  # no s_line: the global floor

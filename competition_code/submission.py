@@ -190,7 +190,8 @@ class RoarCompetitionSolution:
             if pp:
                 kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
             steer = self.veh.steer_for(kappa, v)
-        throttle, brake = self.veh.pedals_for(a, v, max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total))))
+        throttle, brake = self.veh.pedals_for(a, v, max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total))),
+                                              self._line_s(s_total))
         control = {
             "throttle": throttle,
             "steer": steer,

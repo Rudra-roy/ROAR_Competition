@@ -80,6 +80,10 @@ def main():
         if k.startswith("sec"):
             p["a_lat_sections"][int(k[3:])][1] = float(val)
             rebuild = True
+        elif k.startswith("ctf"):  # ctfN=0.7: corner throttle floor of section N (corner_throttle_floor.thr_sec)
+            cf = p["corner_throttle_floor"]
+            ts = cf.setdefault("thr_sec", [cf["thr"]] * len(p["a_lat_sections"]))
+            ts[int(k[3:])] = float(val)
         elif k.startswith("brk"):  # brkN=1.3: braking scale of section N (brake_sec_scale)
             bss = p.setdefault("brake_sec_scale", [1.0] * len(p["a_lat_sections"]))
             bss[int(k[3:])] = float(val)
