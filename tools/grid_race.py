@@ -28,6 +28,10 @@ def apply_overrides(p0, spec):
             cf.setdefault("thr_sec", [cf["thr"]] * n)[int(k[3:])] = float(v)
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(v)
+        elif k.startswith("pb."):  # pedal_binary option: pb.dwell=3, pb.ay_min=8 (pb.on=1 with defaults)
+            pb = p.setdefault("pedal_binary", {})
+            if k != "pb.on":
+                pb[k[3:]] = float(v)
         else:
             p[k] = float(v)
     return p
