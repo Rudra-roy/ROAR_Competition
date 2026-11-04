@@ -24,7 +24,7 @@ DATA = os.path.join(R, "competition_code", "data")
 S25_HUD = os.path.join(os.path.dirname(R), "sandbox_s25", "logs", "s25_xy.hud.csv")
 SHRINK = 0.3
 CAP = 4.0
-LINE_8E = os.path.join(DATA, "racing_line.npz")  # the line the e115 runs drove (pass --line= once it is replaced)
+LINE_8E = os.path.join(R, "tools", "line_e115.npz")  # the line the e115 runs drove (racing_line.npz at 8d1f3a4)
 E115_RUNS = [os.path.join(R, "logs", "final8g_%d.hud.csv" % i) for i in range(1, 6)]
 
 
