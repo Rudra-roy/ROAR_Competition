@@ -23,7 +23,7 @@ from track import load_track  # noqa: E402
 
 LINE = os.path.join(ROOT, "competition_code", "data", "racing_line.npz")
 CENTRE = os.path.join(ROOT, "competition_code", "data", "centreline.npy")
-TARGET_CAP = 3.80  # m, max |offset from centreline| the driven path is steered to
+TARGET_CAP = 3.75  # m, max |offset from centreline| the driven path is steered to
 FLYING_LAPS = (2, 3)
 
 
