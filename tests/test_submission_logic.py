@@ -99,7 +99,7 @@ def test_line_offset_constant_shift(tmp_path):
     f = tmp_path / "off.npz"
     np.savez(f, s=tr.s, d=np.full(len(tr.s), 1.0))
     sol._off = load_line_offset(str(f), tr)
-    s_total = 500.0
+    s_total = 1500.0
     ls = sol._line_s(s_total)
     e_y, e_psi = sol._ref(s_total, 1.0, 0.0)
     assert abs(e_y) < 1e-9 and abs(e_psi) < 1e-6  # car sitting on the shifted line, parallel to it
@@ -116,7 +116,7 @@ def test_line_offset_ramp_heading_and_curvature(tmp_path):
     np.savez(f, s=tr.s, d=d)
     sol._off = load_line_offset(str(f), tr)
     w = 2 * np.pi / tr.length * 20
-    for s_total in (100.0, 1777.0, 4000.0):
+    for s_total in (1100.0, 1777.0, 4000.0):
         ls = sol._line_s(s_total)
         e_y, e_psi = sol._ref(s_total, 0.0, 0.0)
         assert abs(e_y + 0.5 * np.sin(w * ls)) < 1e-3
@@ -124,3 +124,16 @@ def test_line_offset_ramp_heading_and_curvature(tmp_path):
         k = float(np.interp(ls, tr.s, tr.kappa, period=tr.length))
         dd = 0.5 * np.sin(w * ls)
         assert abs(sol._kappa_cmd_ref(s_total) - (k / (1 - k * dd) - 0.5 * w * w * np.sin(w * ls))) < 2e-4
+
+
+def test_line_offset_fades_in_after_start(tmp_path):
+    from submission import OFFSET_FADE_M, load_line_offset
+    sol, *_ = _sol()
+    tr = sol.track
+    f = tmp_path / "off.npz"
+    np.savez(f, s=tr.s, d=np.full(len(tr.s), 1.0))
+    sol._off = load_line_offset(str(f), tr)
+    a, b = OFFSET_FADE_M
+    assert sol._ref(0.5 * a, 0.0, 0.0)[0] == 0.0
+    assert abs(sol._ref(0.5 * (a + b), 0.0, 0.0)[0] + 0.5) < 1e-9
+    assert abs(sol._ref(b + 1, 0.0, 0.0)[0] + 1.0) < 1e-9

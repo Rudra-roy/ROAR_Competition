@@ -19,6 +19,9 @@ LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
 LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "yaw", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
             "steer", "throttle", "brake", "ok", "d_ref")
 START_S_TOL_M = 5.0
+# The learned offset is fitted on flying laps; from the standing start the car is slower and drifts differently
+# (s45_1 lap 1: 0.73 m flying-lap offset sent the car 4.10 m off centre at line_s 218), so fade it in.
+OFFSET_FADE_M = (200.0, 1000.0)  # s_total over which the offset ramps 0 -> 1 after a (re)start
 
 
 def load_line_offset(path, track):
@@ -85,7 +88,9 @@ class RoarCompetitionSolution:
 
     def _off_at(self, s_total, k):
         tr = self.track
-        return float(np.interp(self._line_s(s_total), tr.s, self._off[k], period=tr.length))
+        a, b = OFFSET_FADE_M
+        w = min(max((s_total - a) / (b - a), 0.0), 1.0)
+        return w * float(np.interp(self._line_s(s_total), tr.s, self._off[k], period=tr.length))
 
     def _ref(self, s_total, e_y, e_psi):
         """Errors w.r.t. the reference the MPC tracks: the racing line shifted by the learned offset (linearised)."""
