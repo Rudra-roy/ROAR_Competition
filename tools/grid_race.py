@@ -19,6 +19,10 @@ def apply_overrides(p0, spec):
     n = len(p["a_lat_sections"])
     for kv in spec.split():
         k, v = kv.split("=")
+        if k == "ppuse":
+            on = {int(x) for x in v.split(".")}
+            p["pursuit"]["use_sec"] = [1 if j in on else 0 for j in range(n)]
+            continue
         if k.startswith("sec"):
             p["a_lat_sections"][int(k[3:])][1] = float(v)
         elif k.startswith("brk"):
@@ -32,6 +36,10 @@ def apply_overrides(p0, spec):
             p["pursuit"] = {"la_v": [0.0, 25.0, 30.6, 36.1, 44.4, 50.0, 55.6, 69.4, 83.3],
                             "la_m": [12.0, 19.0, 23.2, 29.6, 38.0, 46.5, 54.9, 63.4, 73.9],
                             "gain_sec": [1.0] * n, "la_sec": [1.0] * n}
+        elif k == "ppuse":  # ppuse=2.4.5.7.8.10: sections that steer with pursuit (others keep the MPC)
+            on = {int(x) for x in v.split(".")}
+            p["pursuit"]["use_sec"] = [1 if j in on else 0 for j in range(n)]
+            continue
         elif k.startswith("ppla"):  # ppla=0.8: scale every lookahead
             p["pursuit"]["la_m"] = [x * float(v) for x in p["pursuit"]["la_m"]]
         elif k.startswith("ppg"):  # ppgN=1.1: steering gain of section N; ppg=1.1 all sections

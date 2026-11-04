@@ -137,6 +137,12 @@ class RoarCompetitionSolution:
         alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
         return 2.0 * np.sin(alpha) / max(float(np.hypot(*r)), 1e-3)
 
+    def _pp_on(self, s_total, pp):
+        """Pursuit steering in this section? pp["use_sec"] (one 0/1 per a_lat section; absent = everywhere). Pure pursuit
+        cuts toward the apex, so a corner with an obstacle inside (the chicane's second apex) keeps the MPC."""
+        use = pp.get("use_sec")
+        return True if use is None else bool(use[bisect.bisect_right(self.veh._starts, self._line_s(s_total)) - 1])
+
     def _pursuit_delta(self, p, yaw, s_total, v, pp):
         """Hybrid steering: pure pursuit on the (offset) line with a speed-scheduled lookahead (pp la_v/la_m, m/s ->
         m, times la_sec[section]); the arc's curvature becomes a steer angle through the tyre model's steady state,
@@ -196,7 +202,7 @@ class RoarCompetitionSolution:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
                                           self._v_ref_mpc, self.u_prev, self._a_lat, self._a_brk)  # kappa = delta
             pp = self.veh.p.get("pursuit")
-            if pp and "la_m" in pp:  # hybrid: pure-pursuit steering, the tyre MPC keeps the pedals
+            if pp and "la_m" in pp and self._pp_on(s_total, pp):  # hybrid: pursuit steering, the MPC keeps the pedals
                 kappa = self._pursuit_delta(p[:2], yaw, s_total, v, pp)
             self.u_prev = (kappa, a)
             steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))

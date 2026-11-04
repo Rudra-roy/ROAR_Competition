@@ -229,3 +229,16 @@ def test_hybrid_pursuit_steering_in_tyre_mode():
     d_line = sol.mpc.ty.steady(k_line, 40.0)[0]
     assert sol.last["kappa_cmd"] < d_line  # left of the line: steers right of the line's own steer
     assert np.isfinite(car.control["steer"]) and abs(car.control["steer"]) <= 1.0
+
+
+def test_pursuit_section_mask():
+    sol, *_ = _sol()
+    n = len(sol.veh.p["a_lat_sections"])
+    pp = {"use_sec": [0] * n}
+    pp["use_sec"][4] = 1
+    s4, s5 = sol.veh.p["a_lat_sections"][4][0], sol.veh.p["a_lat_sections"][5][0]
+    L = sol.track.length
+    to_total = lambda ls: (ls - sol.progress.start_s) % L
+    assert sol._pp_on(to_total(0.5 * (s4 + s5)), pp)
+    assert not sol._pp_on(to_total(s4 - 5.0), pp)
+    assert sol._pp_on(0.0, {})  # no mask: everywhere
