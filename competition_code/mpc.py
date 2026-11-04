@@ -55,6 +55,7 @@ class FrenetMPC:
         self.ck = ck = min(dt / veh.p["steer_tau_s"], 1.0) if veh.p["steer_tau_s"] > 0 else 1.0
         self.a_min = -veh.a_brake * veh.brake_scale
         self.a_lat_margin = float(cfg.get("a_lat_margin", 1.0))
+        self.scrub = bool(cfg.get("scrub", 0))  # subtract the tyre-scrub model from the accel bound
         self.kb = kb = float(cfg.get("beta_k", 0.0))
         if kb and not cfg.get("beta_tau_s", 0) > 0:
             raise ValueError("mpc beta_k needs beta_tau_s > 0 (s), got %r" % cfg.get("beta_tau_s"))
@@ -207,7 +208,8 @@ class FrenetMPC:
             return self._fallback(x0, kr[0], vr[0], al_raw[0])  # never let a NaN into the solver
         ks = np.array([veh.K(x) for x in vl[:N]])
         a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]])  # = a_min unless brake_model makes it v-dependent
-        ad = np.maximum([veh.a_drive(x) - veh.scrub(x * x * abs(k)) for x, k in zip(vl[:N], kr)], a_lo)
+        ad = np.maximum([veh.a_drive(x) - (veh.scrub(x * x * abs(k)) if self.scrub else 0.0)
+                         for x, k in zip(vl[:N], kr)], a_lo)
         vt = np.maximum(vl[:N], V_TAN_MIN)
 
         self.vals[self.vidx] = -dt * vl[:N, None]
