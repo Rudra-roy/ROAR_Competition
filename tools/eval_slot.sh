@@ -12,11 +12,17 @@ LOG="$WT/logs/$LABEL"; mkdir -p "$WT/logs"
 SRVPATH=$(echo "$PATH" | tr ':' '\n' | grep -v '/\.venv/' | paste -sd:)
 port_open() { (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null; }
 SRV=""; CPID=""
+kill_server() {  # CarlaUE4 re-sessions itself under Proton: kill every process carrying THIS slot's port argument
+  for p in $(pgrep -f "carla-rpc-port=$PORT"); do [ "$p" != "$$" ] && kill -KILL "$p" 2>/dev/null; done
+  for _ in $(seq 30); do port_open || break; sleep 1; done
+}
 cleanup() {
   [ -n "$CPID" ] && { kill -TERM -- "-$CPID" 2>/dev/null; sleep 1; kill -KILL -- "-$CPID" 2>/dev/null; }
-  [ -n "$SRV" ] && { kill -TERM -- "-$SRV" 2>/dev/null; sleep 2; kill -KILL -- "-$SRV" 2>/dev/null; }
+  [ -n "$SRV" ] && { kill -TERM -- "-$SRV" 2>/dev/null; sleep 1; kill -KILL -- "-$SRV" 2>/dev/null; }
+  kill_server
 }
 trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
+if port_open; then kill_server; fi  # a stale server from an earlier run on this slot
 if port_open; then echo "$LABEL,,0,port_busy"; exit 2; fi
 PATH=$SRVPATH setsid "$PARENT/run_monza.sh" -RenderOffScreen -carla-rpc-port=$PORT -carla-streaming-port=$((PORT + 1)) > "$LOG.server.log" 2>&1 &
 SRV=$!

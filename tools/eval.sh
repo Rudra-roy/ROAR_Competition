@@ -13,8 +13,13 @@ CSV="$REPO/results.csv"
 SHA=$(git -C "$REPO" rev-parse --short HEAD)
 export WINEPREFIX=~/tools/pfx/pfx
 SRV=""
-killsrv() {  # only THIS eval's server (its process group): other sim slots share the Wine prefix
-  if [ -n "$SRV" ]; then kill -TERM -- "-$SRV" 2>/dev/null; sleep 2; kill -KILL -- "-$SRV" 2>/dev/null; SRV=""; fi
+killsrv() {  # only THIS eval's server (the default-port one, no -carla-rpc-port argument): other sim slots share
+  # the Wine prefix and CarlaUE4 re-sessions itself under Proton, so match on the command line, not the process group
+  if [ -n "$SRV" ]; then kill -TERM -- "-$SRV" 2>/dev/null; SRV=""; fi
+  for p in $(pgrep -f "CarlaUE4.exe"); do
+    [ "$p" != "$$" ] && ! tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | grep -q "carla-rpc-port=" && kill -KILL "$p" 2>/dev/null
+  done
+  for _ in $(seq 30); do port_open || break; sleep 1; done
   sleep 1
 }
 trap killsrv EXIT
