@@ -174,3 +174,28 @@ def test_brake_sec_scale_default_and_per_section():
     s7, s8 = p["a_lat_sections"][7][0], p["a_lat_sections"][8][0]
     assert v.brake_sec(0.5 * (s7 + s8)) == 1.3
     assert v.brake_sec(s7 - 1.0) == 1.0 and v.brake_sec(s8 + 1.0) == 1.0
+
+
+def test_corner_throttle_floor_uses_the_pedal_instead_of_engine_braking():
+    import json, os
+    from vehicle import Vehicle
+    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
+    p.pop("corner_throttle_floor", None)
+    base = Vehicle(p)
+    t0, b0 = base.pedals_for(-16.0, 50.0, 25.0)
+    assert t0 == 0.0 and b0 > 0.0  # closed throttle + pedal
+    p["corner_throttle_floor"] = {"thr": 0.5, "ay_min": 8.0}
+    v = Vehicle(p)
+    assert v.pedals_for(-16.0, 50.0, 0.0) == (t0, b0)  # straight: unchanged
+    t1, b1 = v.pedals_for(-12.0, 50.0, 25.0)
+    assert t1 == 0.5 and 0.0 < b1 <= 1.0
+    pm = p["pedal_map"]
+    import numpy as np
+    row_t = np.interp(50.0, pm["v"], np.array(pm["a_thr"])[:, 5])          # throttle 0.5 at 50 m/s
+    brk = np.array(pm["a_brk"])[5]                                           # v = 50 row
+    contrib = np.interp(b1, pm["brk"], brk - brk[0])
+    assert abs(row_t + contrib + 12.0) < 0.3  # the two together give the commanded decel
+    t2, b2 = v.pedals_for(-2.0, 50.0, 25.0)
+    assert t2 > 0.5 and b2 == 0.0  # mild decel: throttle alone, above the floor
+    t3, b3 = v.pedals_for(-19.0, 50.0, 25.0)
+    assert b3 == 1.0 and 0.0 <= t3 < 0.5  # beyond full pedal: throttle comes down

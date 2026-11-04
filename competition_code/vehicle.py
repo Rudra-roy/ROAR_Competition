@@ -97,7 +97,29 @@ class Vehicle:
             u = min(max(u, -c), c)
         return u
 
-    def pedals_for(self, a_cmd, v):
+    def pedals_for(self, a_cmd, v, a_y=0.0):
+        """(throttle, brake) for a longitudinal accel command at speed v. a_y: current lateral accel magnitude.
+        Option "corner_throttle_floor": {"thr": t, "ay_min": a} - while cornering (a_y > a) hold the throttle at
+        >= t and take the extra deceleration from the brake pedal: a closed throttle is engine braking on the driven
+        wheels (-13 m/s^2 at 50 m/s here), which unloads the rear mid-corner; the pedal brakes all four wheels."""
+        cf = self.p.get("corner_throttle_floor")
+        if cf and self._pm is not None and a_y > cf["ay_min"] and a_cmd < 0:
+            vg, ug, tab = self._pm
+            i = int(np.clip(np.searchsorted(vg, v) - 1, 0, len(vg) - 2))
+            f = min(max((v - vg[i]) / (vg[i + 1] - vg[i]), 0.0), 1.0)
+            row = (1 - f) * tab[i] + f * tab[i + 1]   # accel over u = -1..1 (brake..throttle), throttle 0 at u = 0
+            thr_u, brk_u = ug[ug >= 0], -ug[ug <= 0][::-1]  # 0..1 each
+            a_thr = row[ug >= 0]
+            a_brk = row[ug <= 0][::-1] - row[ug == 0][0]  # the pedal's own contribution (<= 0), engine braking removed
+            t = float(cf["thr"])
+            a_floor = float(np.interp(t, thr_u, a_thr))
+            if a_cmd >= a_floor:  # mild: throttle alone, at or above the floor
+                return float(np.interp(a_cmd, a_thr, thr_u)), 0.0
+            need = a_cmd - a_floor  # what the pedal has to add (<= 0)
+            if need >= a_brk[-1]:
+                return t, float(np.interp(need, a_brk[::-1], brk_u[::-1]))
+            # beyond full pedal: give the rest back to the throttle (more engine braking), pedal stays full
+            return float(np.clip(np.interp(a_cmd - a_brk[-1], a_thr, thr_u), 0.0, t)), 1.0
         if self._pm is not None:
             # The measured map is continuous and monotone in u at every speed (no gap), so the inverse is one
             # pedal setting: linear in v between grid rows, then interp a -> u (clamped to full brake/throttle).
