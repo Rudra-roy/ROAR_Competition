@@ -114,6 +114,10 @@ def _fmt_t(t):
     return "%d:%04.1f" % (int(t // 60), t % 60)
 
 
+class NotReady(Exception):
+    """Vehicle not found yet; the HUD skips this frame instead of disabling itself."""
+
+
 class Hud:
     def __init__(self, client_factory=None, data_dir=DATA, log=None):
         self.client_factory = client_factory or self._default_client
@@ -160,8 +164,8 @@ class Hud:
         c.set_timeout(120.0)
         self.world = c.get_world()
         actors = list(self.world.get_actors().filter("vehicle.*"))
-        if not actors:
-            raise RuntimeError("no vehicle in the world")
+        if not actors:  # a second client's actor list lags in synchronous mode: retry next frame, don't disable
+            raise NotReady("no vehicle in the world yet")
         hero = [a for a in actors if a.attributes.get("role_name") == "hero"]
         self.actor = (hero or actors)[0]
 
@@ -293,6 +297,8 @@ class Hud:
             self.draw(scr, s)
             if self.log:
                 self._log(s)
+        except NotReady:
+            pass
         except Exception as e:  # never break the race
             self.disabled = True
             print("HUD disabled: %s: %s" % (type(e).__name__, e), file=sys.stderr)
@@ -335,6 +341,19 @@ def install(hud=None):
             pygame.display.flip = real
 
     infrastructure.ManualControlViewer.render = render
+
+    # Grab the race car in-process when the runner wraps it (no second client needed); fallback = _connect().
+    wrap_init = infrastructure.RoarCompetitionAgentWrapper.__init__
+
+    def init(self, wrapped, *a, **k):
+        wrap_init(self, wrapped, *a, **k)
+        try:
+            hud.actor = wrapped._base_actor
+            hud.world = hud.actor.get_world()
+        except Exception:
+            pass
+
+    infrastructure.RoarCompetitionAgentWrapper.__init__ = init
 
 
 def uninstall():
