@@ -101,13 +101,17 @@ class Reward:
         self.pen, self.gen = pen, gen
 
     def __call__(self, r):
+        return float(self.per_segment(r).sum())
+
+    def per_segment(self, r):
+        """Reward of each segment (time + crash cost, negated)."""
         t = np.asarray(r["times"], float)
         c = np.asarray(r["coll"], bool)
         frac = np.clip(np.asarray(r.get("frac", [1.0] * len(t)), float), 0.0, 1.0)
         sev = np.minimum(np.asarray(r.get("impulse", [0.0] * len(t)), float) / 2000.0, 2.0)
         rest = np.where(c, (1.0 - frac) * self.base, 0.0)
         cost = self.pen * (1.0 + sev) * (0.5 + 0.5 * (1.0 - frac))  # the earlier in the segment, the dearer
-        return -(t.sum() + rest.sum() + (cost * c).sum())
+        return -(t + rest + cost * c)
 
     def target(self):
         a, b = TARGET_COLL_RATE
@@ -167,8 +171,13 @@ def main():
             thetas = [theta] + [theta + a.sigma * e for e in eps] + [theta - a.sigma * e for e in eps]
             rs = evaluate(workers, thetas)
             f = np.array([reward(r) for r in rs])
-            f_mean, fp, fm = f[0], f[1:1 + len(eps)], f[1 + len(eps):]
-            ranks = np.argsort(np.argsort(np.r_[fp, fm])) / (2 * len(eps) - 1) - 0.5
+            f_mean = f[0]
+            # per-corner shaping: rank the variants within each segment, then sum the ranks, so a gain in any corner
+            # counts the same (the corner with the biggest absolute gain would otherwise drown out the rest)
+            F = np.array([reward.per_segment(r) for r in rs[1:]])  # (pop, segments)
+            seg_ranks = np.argsort(np.argsort(F, axis=0), axis=0) / (len(F) - 1) - 0.5
+            score = seg_ranks.sum(1)
+            ranks = np.argsort(np.argsort(score)) / (len(score) - 1) - 0.5
             grad = ((ranks[:len(eps)] - ranks[len(eps):])[:, None] * eps).sum(0) / (len(eps) * a.sigma)
             m = 0.9 * m + 0.1 * grad
             v = 0.999 * v + 0.001 * grad ** 2

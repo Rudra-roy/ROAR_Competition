@@ -31,3 +31,10 @@ def test_penalty_adapts_to_crash_rate_and_maturity():
     for _ in range(100):
         R.adapt(1.0, improving=False)
     assert R.pen == es.COLL_PEN_MAX
+
+
+def test_per_segment_reward_sums_to_total():
+    R = es.Reward([10.0, 20.0], pen=5.0)
+    r = {"times": [10.0, 18.0], "coll": [False, True], "impulse": [0, 500], "frac": [1, 0.9]}
+    import numpy as np
+    assert np.isclose(R.per_segment(r).sum(), R(r)) and R.per_segment(r)[0] == -10.0
