@@ -37,15 +37,17 @@ class Tyres:
         self.Cf, self.Cr, self.mu_f, self.mu_r = float(t["Cf"]), float(t["Cr"]), float(t["mu_f"]), float(t["mu_r"])
         self.a, self.b, self.I, self.tau_d = float(t["a"]), float(t["b"]), float(t["I"]), float(t["tau_d"])
         self.g_v, self.g_k = np.asarray(t["g_v"], float), np.asarray(t["g_k"], float)
+        self.k_lt = float(t.get("k_lt", 0.0))  # braking load transfer: front grip x (1 - k ax/g), rear x (1 + k ax/g)
 
     def g(self, v):
         return float(np.interp(v, self.g_v, self.g_k))
 
-    def forces(self, alpha_f, alpha_r):
-        """F_f, F_r and their slopes G_f, G_r at the given slip angles (per unit mass)."""
+    def forces(self, alpha_f, alpha_r, ax=0.0):
+        """F_f, F_r and their slopes G_f, G_r at the given slip angles (per unit mass), at longitudinal accel ax."""
         uf, ur = self.Cf * alpha_f / self.mu_f, self.Cr * alpha_r / self.mu_r
         tf, tr = np.tanh(uf), np.tanh(ur)
-        return self.mu_f * tf, self.mu_r * tr, self.Cf * (1 - tf * tf), self.Cr * (1 - tr * tr)
+        wf, wr = 1.0 - self.k_lt * ax / 9.81, 1.0 + self.k_lt * ax / 9.81
+        return wf * self.mu_f * tf, wr * self.mu_r * tr, wf * self.Cf * (1 - tf * tf), wr * self.Cr * (1 - tr * tr)
 
     def alpha_for(self, F, C, mu):
         return mu / C * math.atanh(max(min(F / mu, F_SAT), -F_SAT))
@@ -69,7 +71,7 @@ class Tyres:
         """Nonlinear Euler step of the full state (v taken from the state)."""
         e_y, e_psi, v, a_act, d, beta, r = x
         vv = max(v, V_FLOOR)
-        Ff, Fr, _, _ = self.forces(d - beta - self.a * r / vv, -beta + self.b * r / vv)
+        Ff, Fr, _, _ = self.forces(d - beta - self.a * r / vv, -beta + self.b * r / vv, a_act)
         return np.array([e_y + dt * v * (e_psi + beta), e_psi + dt * (r - v * kappa_ref), v + dt * a_act,
                          a_act + c * (u[1] - a_act), d + cd * (u[0] - d),
                          beta + dt * ((Ff + Fr) / vv - r), r + dt * (self.a * Ff - self.b * Fr) / self.I])
@@ -225,7 +227,7 @@ class TyreMPC:
         v = np.maximum(X[:N, 2], V_FLOOR)
         d0, b0, r0 = X[:N, 4], X[:N, 5], X[:N, 6]
         af0, ar0 = d0 - b0 - ty.a * r0 / v, -b0 + ty.b * r0 / v
-        Ff, Fr, Gf, Gr = ty.forces(af0, ar0)
+        Ff, Fr, Gf, Gr = ty.forces(af0, ar0, X[:N, 3])
         self.vals[self.psidx] = dt * kr
         self.vals[self.eyidx] = (-dt * np.maximum(X[:N, 2], 0.0))[:, None]
         self.vals[self.latidx[:, 0, :]] = -np.c_[dt * Gf / v, 1 - dt * (Gf + Gr) / v,
@@ -239,7 +241,7 @@ class TyreMPC:
         self.vals[self.sidx[:, 1, :]] = (ty.b / v1)[:, None]
         d1, b1, r1 = X[1:, 4], X[1:, 5], X[1:, 6]
         af1, ar1 = d1 - b1 - ty.a * r1 / v1, -b1 + ty.b * r1 / v1
-        Ff1, Fr1, Gf1, Gr1 = ty.forces(af1, ar1)
+        Ff1, Fr1, Gf1, Gr1 = ty.forces(af1, ar1, X[1:, 3])
         self.vals[self.ayidx] = np.c_[Gf1, -(Gf1 + Gr1), (-Gf1 * ty.a + Gr1 * ty.b) / v1][:, None, :]
         return c_beta, c_r, Ff1 + Fr1 - Gf1 * af1 - Gr1 * ar1
 

@@ -33,15 +33,17 @@ W_BETA = 5.0  # beta residual weight vs r (beta ~0.05 rad typical, r ~0.3 rad/s)
 
 
 def load_hud(path):
-    """-> dict of arrays: v, steer, beta (rad, ROAR, left +), r (rad/s), yaw (rad), ok mask (no teleport, moving)."""
+    """-> dict of arrays: v, steer, beta (rad, ROAR, left +), r (rad/s), yaw (rad), ax (m/s^2, longitudinal accel),
+    ok mask (no teleport, moving)."""
     h = np.genfromtxt(path, delimiter=",", names=True)
     yaw = np.unwrap(h["yaw"])
     r = np.gradient(yaw) / DT
+    ax = np.convolve(np.gradient(h["v"]) / DT, np.ones(5) / 5, "same")
     beta = -np.radians(h["beta"])  # HUD beta: CARLA sign (right +) -> ROAR (left +)
     jump = np.r_[False, np.hypot(np.diff(h["x"]), np.diff(h["y"])) > 6.0]
     bad = np.convolve(jump, np.ones(2 * H + 1), "same") > 0  # drop windows touching a teleport
     ok = (h["v"] > V_MIN) & ~bad & np.isfinite(beta) & np.isfinite(r)
-    return dict(v=h["v"], steer=h["steer"], beta=beta, r=r, yaw=yaw, ok=ok)
+    return dict(v=h["v"], steer=h["steer"], beta=beta, r=r, yaw=yaw, ax=ax, ok=ok)
 
 
 def windows(d, h=H, stride=STRIDE):
@@ -56,24 +58,27 @@ def windows(d, h=H, stride=STRIDE):
 def unpack(theta):
     Cf, Cr, mu_f, mu_r, tau_d = np.exp(theta[:5])
     a = 0.8 + (WHEELBASE - 1.6) / (1.0 + np.exp(-theta[5]))
-    g = np.exp(theta[6:6 + len(G_V)])
-    return Cf, Cr, mu_f, mu_r, a, WHEELBASE - a, I_PIN, tau_d, g
+    k_lt = theta[6]  # load transfer: front grip x (1 - k_lt ax/g), rear x (1 + k_lt ax/g); braking (ax < 0) lightens the rear
+    g = np.exp(theta[7:7 + len(G_V)])
+    return Cf, Cr, mu_f, mu_r, a, WHEELBASE - a, I_PIN, tau_d, k_lt, g
 
 
 def pack(p):
     fa = (p["a"] - 0.8) / (WHEELBASE - 1.6)
     return np.r_[np.log([p["Cf"], p["Cr"], p["mu_f"], p["mu_r"], p["tau_d"]]), np.log(fa / (1 - fa)),
-                 np.log(p["g_k"])]
+                 p.get("k_lt", 0.0), np.log(p["g_k"])]
 
 
-def step(beta, r, delta, v, steer, p, dt=DT):
+def step(beta, r, delta, v, steer, p, dt=DT, ax=0.0):
     """One Euler step of (beta, r, delta); all arrays broadcast. p = dict of parameters (g_v, g_k tables)."""
     Cf, Cr, mu_f, mu_r, a, b, I, tau_d = (p[k] for k in ("Cf", "Cr", "mu_f", "mu_r", "a", "b", "I", "tau_d"))
     vv = np.maximum(v, 1.0)
+    wf = 1.0 - p.get("k_lt", 0.0) * ax / 9.81
+    wr = 1.0 + p.get("k_lt", 0.0) * ax / 9.81
     af = delta - beta - a * r / vv
     ar = -beta + b * r / vv
-    Ff = mu_f * np.tanh(Cf * af / mu_f)
-    Fr = mu_r * np.tanh(Cr * ar / mu_r)
+    Ff = wf * mu_f * np.tanh(Cf * af / mu_f)
+    Fr = wr * mu_r * np.tanh(Cr * ar / mu_r)
     beta1 = beta + dt * ((Ff + Fr) / vv - r)
     r1 = r + dt * (a * Ff - b * Fr) / I
     g = np.interp(v, p["g_v"], p["g_k"])
@@ -81,34 +86,35 @@ def step(beta, r, delta, v, steer, p, dt=DT):
     return beta1, r1, delta1
 
 
-def simulate(p, V, S, beta0, r0):
-    """Windows: V, S (n, h+1) measured speed and steer; returns beta, r (n, h) predicted at ticks 1..h."""
+def simulate(p, V, S, beta0, r0, AX=None):
+    """Windows: V, S (n, h+1) measured speed and steer (AX: longitudinal accel); returns beta, r (n, h) at ticks 1..h."""
     g0 = np.interp(V[:, 0], p["g_v"], p["g_k"])
     beta, r, delta = beta0.copy(), r0.copy(), -g0 * S[:, 0]  # actuator assumed settled at the window start
     B, R = [], []
     for k in range(V.shape[1] - 1):
-        beta, r, delta = step(beta, r, delta, V[:, k], S[:, k], p)
+        beta, r, delta = step(beta, r, delta, V[:, k], S[:, k], p, ax=0.0 if AX is None else AX[:, k])
         B.append(beta), R.append(r)
     return np.array(B).T, np.array(R).T
 
 
 def params_from_theta(theta):
-    Cf, Cr, mu_f, mu_r, a, b, I, tau_d, g = unpack(theta)
-    return dict(Cf=Cf, Cr=Cr, mu_f=mu_f, mu_r=mu_r, a=a, b=b, I=I, tau_d=tau_d, g_v=list(G_V), g_k=list(g), dt=DT)
+    Cf, Cr, mu_f, mu_r, a, b, I, tau_d, k_lt, g = unpack(theta)
+    return dict(Cf=Cf, Cr=Cr, mu_f=mu_f, mu_r=mu_r, a=a, b=b, I=I, tau_d=tau_d, k_lt=k_lt, g_v=list(G_V),
+                g_k=list(g), dt=DT)
 
 
-def residuals(theta, V, S, BETA, R):
+def residuals(theta, V, S, BETA, R, AX=None):
     p = params_from_theta(theta)
-    b, r = simulate(p, V, S, BETA[:, 0], R[:, 0])
+    b, r = simulate(p, V, S, BETA[:, 0], R[:, 0], AX)
     return np.r_[(W_BETA * (b - BETA[:, 1:])).ravel(), (r - R[:, 1:]).ravel()]
 
 
-def fit(V, S, BETA, R, theta0=None, verbose=0):
+def fit(V, S, BETA, R, theta0=None, verbose=0, AX=None):
     from scipy.optimize import least_squares
     if theta0 is None:
         theta0 = pack(dict(Cf=60.0, Cr=80.0, mu_f=16.0, mu_r=16.0, a=1.4, b=WHEELBASE - 1.4, I=2.5, tau_d=0.1,
-                           g_k=[0.6, 0.5, 0.4, 0.3]))
-    res = least_squares(residuals, theta0, args=(V, S, BETA, R), method="trf", verbose=verbose, max_nfev=200,
+                           k_lt=0.0, g_k=[0.6, 0.5, 0.4, 0.3]))
+    res = least_squares(residuals, theta0, args=(V, S, BETA, R, AX), method="trf", verbose=verbose, max_nfev=200,
                         x_scale=0.3)
     return params_from_theta(res.x), res
 
@@ -132,16 +138,16 @@ def main(argv):
     sets = []
     for d in data:
         idx = windows(d)
-        sets.append(tuple(d[k][idx] for k in ("v", "steer", "beta", "r")))
+        sets.append(tuple(d[k][idx] for k in ("v", "steer", "beta", "r", "ax")))
     train = [np.concatenate(x) for x in zip(*sets[:-hold])] if hold < len(files) else [np.concatenate(x) for x in zip(*sets)]
     test = [np.concatenate(x) for x in zip(*sets[-hold:])]
     print("train windows %d, holdout windows %d (%d files)" % (len(train[0]), len(test[0]), hold))
-    p, res = fit(*train, verbose=1)
-    for k in ("Cf", "Cr", "mu_f", "mu_r", "a", "b", "I", "tau_d"):
+    p, res = fit(*train[:4], verbose=1, AX=train[4])
+    for k in ("Cf", "Cr", "mu_f", "mu_r", "a", "b", "I", "tau_d", "k_lt"):
         print("  %-6s %8.4f" % (k, p[k]))
     print("  g(v) at", G_V, "=", np.round(p["g_k"], 4), " (mu_f + mu_r = %.1f m/s^2)" % (p["mu_f"] + p["mu_r"]))
-    V, S, BETA, R = test
-    b, r = simulate(p, V, S, BETA[:, 0], R[:, 0])
+    V, S, BETA, R, AX = test
+    b, r = simulate(p, V, S, BETA[:, 0], R[:, 0], AX)
     sys.path.insert(0, os.path.join(ROOT, "competition_code"))
     from vehicle import Vehicle
     with open(PARAMS) as f:
