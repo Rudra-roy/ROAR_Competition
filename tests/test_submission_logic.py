@@ -137,3 +137,18 @@ def test_line_offset_fades_in_after_start(tmp_path):
     assert sol._ref(0.5 * a, 0.0, 0.0)[0] == 0.0
     assert abs(sol._ref(0.5 * (a + b), 0.0, 0.0)[0] + 0.5) < 1e-9
     assert abs(sol._ref(b + 1, 0.0, 0.0)[0] + 1.0) < 1e-9
+
+
+def test_pursuit_kappa_on_circle_and_straight():
+    sol, *_ = _sol()
+    sol._off = None
+    tr = sol.track
+    i = 2000
+    p, yaw = tr.xy[i], tr.psi[i]
+    s_total = (tr.s[i] - sol.progress.start_s) % tr.length
+    k = sol._pursuit_kappa(p, yaw, s_total, 30.0)
+    j = (i + int(30 / tr.ds)) % len(tr.s)
+    kmean = tr.kappa[i:j].mean() if j > i else tr.kappa[i]
+    assert abs(k - kmean) < 0.01 + 0.5 * abs(kmean)  # on the line: roughly the line's own curvature ahead
+    k_left = sol._pursuit_kappa(p + 2.0 * np.r_[-np.sin(yaw), np.cos(yaw)], yaw, s_total, 30.0)
+    assert k_left < k  # car 2 m left of the line steers back right

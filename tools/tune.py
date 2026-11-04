@@ -80,6 +80,11 @@ def main():
         if k.startswith("sec"):
             p["a_lat_sections"][int(k[3:])][1] = float(val)
             rebuild = True
+        elif k.startswith("pursuit."):  # pursuit.la0 / pursuit.la_k; pursuit.off=1 removes it
+            if k == "pursuit.off":
+                p.pop("pursuit", None)
+            else:
+                p.setdefault("pursuit", {})[k[8:]] = float(val)
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(val)
         else:

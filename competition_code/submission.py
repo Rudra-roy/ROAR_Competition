@@ -98,6 +98,20 @@ class RoarCompetitionSolution:
             return e_y, e_psi
         return e_y - self._off_at(s_total, 0), e_psi - self._off_at(s_total, 1)
 
+    def _pursuit_kappa(self, p, yaw, s_total, lookahead):
+        """Curvature of the arc from the car through the (offset) reference point `lookahead` m ahead on the line:
+        aiming ahead makes the car turn in before the corner and cut toward the apex."""
+        tr = self.track
+        ls = (self._line_s(s_total) + lookahead) % tr.length
+        q = np.array([np.interp(ls, tr.s, tr.xy[:, k], period=tr.length) for k in (0, 1)])
+        if self._off is not None:
+            psi = float(np.interp(ls, tr.s, np.unwrap(tr.psi), period=tr.length))
+            q = q + self._off_at(s_total + lookahead, 0) * np.array([-np.sin(psi), np.cos(psi)])
+        r = q - p
+        alpha = float(np.arctan2(r[1], r[0]) - yaw)
+        alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
+        return 2.0 * np.sin(alpha) / max(float(np.hypot(*r)), 1e-3)
+
     def _kappa_cmd_ref(self, s):
         """Curvature of the shifted reference: offset curve of the line plus the offset's own bending."""
         k = self._kappa_ref(s)
@@ -133,6 +147,9 @@ class RoarCompetitionSolution:
         kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, s_total, self._kappa_cmd_ref, self._v_ref_mpc,
                                       self.u_prev, self._a_lat)
         self.u_prev = (kappa, a)
+        pp = self.veh.p.get("pursuit")  # {"la0": m, "la_k": s}: pure-pursuit steering, MPC keeps the pedals
+        if pp:
+            kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
         steer = self.veh.steer_for(kappa, v)
         throttle, brake = self.veh.pedals_for(a, v)
         control = {
