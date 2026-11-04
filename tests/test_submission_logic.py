@@ -73,3 +73,54 @@ def test_log_row_has_body_yaw():
     vel.val = 20.0 * np.r_[np.cos(sol.track.psi[i]), np.sin(sol.track.psi[i]), 0.0]
     asyncio.run(sol.step())
     assert sol.last["yaw"] == rpy.val[2]  # the body yaw, for the sideslip fit (tools/fit_sideslip.py)
+
+
+def _sol():
+    loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
+    sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
+    asyncio.run(sol.initialize())
+    return sol, loc, rpy, vel, car
+
+
+def test_line_offset_absent_is_identity(tmp_path):
+    from submission import load_line_offset
+    sol, *_ = _sol()
+    assert load_line_offset(str(tmp_path / "nope.npz"), sol.track) is None
+    sol._off = None
+    s = 1234.0
+    assert sol._ref(s, 0.7, 0.05) == (0.7, 0.05)
+    assert sol._kappa_cmd_ref(s) == sol._kappa_ref(s)
+
+
+def test_line_offset_constant_shift(tmp_path):
+    from submission import load_line_offset
+    sol, *_ = _sol()
+    tr = sol.track
+    f = tmp_path / "off.npz"
+    np.savez(f, s=tr.s, d=np.full(len(tr.s), 1.0))
+    sol._off = load_line_offset(str(f), tr)
+    s_total = 500.0
+    ls = sol._line_s(s_total)
+    e_y, e_psi = sol._ref(s_total, 1.0, 0.0)
+    assert abs(e_y) < 1e-9 and abs(e_psi) < 1e-6  # car sitting on the shifted line, parallel to it
+    k = float(np.interp(ls, tr.s, tr.kappa, period=tr.length))
+    assert abs(sol._kappa_cmd_ref(s_total) - k / (1 - k * 1.0)) < 1e-4
+
+
+def test_line_offset_ramp_heading_and_curvature(tmp_path):
+    from submission import load_line_offset
+    sol, *_ = _sol()
+    tr = sol.track
+    d = 0.5 * np.sin(2 * np.pi * tr.s / tr.length * 20)  # smooth periodic offset, 20 waves per lap
+    f = tmp_path / "off.npz"
+    np.savez(f, s=tr.s, d=d)
+    sol._off = load_line_offset(str(f), tr)
+    w = 2 * np.pi / tr.length * 20
+    for s_total in (100.0, 1777.0, 4000.0):
+        ls = sol._line_s(s_total)
+        e_y, e_psi = sol._ref(s_total, 0.0, 0.0)
+        assert abs(e_y + 0.5 * np.sin(w * ls)) < 1e-3
+        assert abs(e_psi + 0.5 * w * np.cos(w * ls)) < 1e-3
+        k = float(np.interp(ls, tr.s, tr.kappa, period=tr.length))
+        dd = 0.5 * np.sin(w * ls)
+        assert abs(sol._kappa_cmd_ref(s_total) - (k / (1 - k * dd) - 0.5 * w * w * np.sin(w * ls))) < 2e-4
