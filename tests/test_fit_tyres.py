@@ -2,7 +2,7 @@ import numpy as np
 
 import fit_tyres as ft
 
-TRUE = dict(Cf=70.0, Cr=90.0, mu_f=15.0, mu_r=17.0, a=1.3, b=ft.WHEELBASE - 1.3, I=2.4, tau_d=0.12,
+TRUE = dict(Cf=70.0, Cr=90.0, mu_f=15.0, mu_r=17.0, a=1.3, b=ft.WHEELBASE - 1.3, I=ft.I_PIN, tau_d=0.12,
             g_v=list(ft.G_V), g_k=[0.55, 0.45, 0.36, 0.3], dt=ft.DT)
 
 

@@ -26,6 +26,9 @@ STRIDE = 5
 V_MIN = 10.0
 G_V = [10.0, 25.0, 40.0, 55.0]  # steer-gain knots, m/s (clamped above: steer is too small up there to identify it)
 WHEELBASE = 2.875  # m, Tesla Model 3 (CARLA vehicle.tesla.model3); a + b pinned, a within [0.8, L - 0.8]
+I_PIN = 2.4  # m^2, Iz/m pinned (Model 3: ~4500 kg m^2 / 1845 kg). Free, the fit took 0.69: a yaw time constant of
+# 0.1 s that the race logs contradict (the car answers steer with ~0.3-0.4 s lag), and the MPC built on it
+# over-steered into the chicane wall at 66 m/s (t2, 2026-11-04).
 W_BETA = 5.0  # beta residual weight vs r (beta ~0.05 rad typical, r ~0.3 rad/s)
 
 
@@ -51,15 +54,15 @@ def windows(d, h=H, stride=STRIDE):
 
 
 def unpack(theta):
-    Cf, Cr, mu_f, mu_r, I, tau_d = np.exp(theta[:6])
-    a = 0.8 + (WHEELBASE - 1.6) / (1.0 + np.exp(-theta[6]))
-    g = np.exp(theta[7:7 + len(G_V)])
-    return Cf, Cr, mu_f, mu_r, a, WHEELBASE - a, I, tau_d, g
+    Cf, Cr, mu_f, mu_r, tau_d = np.exp(theta[:5])
+    a = 0.8 + (WHEELBASE - 1.6) / (1.0 + np.exp(-theta[5]))
+    g = np.exp(theta[6:6 + len(G_V)])
+    return Cf, Cr, mu_f, mu_r, a, WHEELBASE - a, I_PIN, tau_d, g
 
 
 def pack(p):
     fa = (p["a"] - 0.8) / (WHEELBASE - 1.6)
-    return np.r_[np.log([p["Cf"], p["Cr"], p["mu_f"], p["mu_r"], p["I"], p["tau_d"]]), np.log(fa / (1 - fa)),
+    return np.r_[np.log([p["Cf"], p["Cr"], p["mu_f"], p["mu_r"], p["tau_d"]]), np.log(fa / (1 - fa)),
                  np.log(p["g_k"])]
 
 
