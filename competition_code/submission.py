@@ -12,7 +12,7 @@ import roar_py_interface
 from mpc import FrenetMPC
 from track import TELEPORT_JUMP_M, Progress, load_track
 from tyre_mpc import TyreMPC
-from vehicle import Vehicle, load_profile
+from vehicle import BinaryPedals, Vehicle, load_profile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
@@ -73,6 +73,8 @@ class RoarCompetitionSolution:
         # "model": "tyre" = slip-aware MPC (tyre_mpc.py, needs vehicle_params["tyre"]); else the kinematic FrenetMPC
         self.tyre = veh.p["mpc"].get("model") == "tyre"
         self._e_y0 = None  # lateral offset at the (re)start, blended out over START_BLEND_M
+        bp = veh.p.get("pedal_binary")  # {"dwell": ticks, "ay_min": m/s^2}: on/off pedals in corners and braking
+        self._binary = BinaryPedals(veh, bp.get("dwell", 3), bp.get("ay_min", 8.0)) if bp else None
         self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else \
             FrenetMPC(veh, dict(veh.p["mpc"], **veh.p.get("mpc_kinematic", {})))
         self._yaw_prev = None
@@ -190,8 +192,9 @@ class RoarCompetitionSolution:
             if pp:
                 kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
             steer = self.veh.steer_for(kappa, v)
-        throttle, brake = self.veh.pedals_for(a, v, max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total))),
-                                              self._line_s(s_total))
+        a_y = max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total)))
+        tb = self._binary(a, v, a_y) if self._binary is not None else None
+        throttle, brake = tb if tb is not None else self.veh.pedals_for(a, v, a_y, self._line_s(s_total))
         control = {
             "throttle": throttle,
             "steer": steer,

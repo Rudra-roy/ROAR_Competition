@@ -137,6 +137,14 @@ class Vehicle:
             return (1.0 if th >= 0.95 else float(np.clip(th, 0, 1))), 0.0
         return 0.0, float(np.clip(-a_cmd / (self.a_brake * self.brake_scale), 0, 1))
 
+    def pedal_levels(self, v):
+        """Accel of the three binary pedal states at speed v: full throttle, lift (both 0), full brake."""
+        vg, ug, tab = self._pm
+        i = int(np.clip(np.searchsorted(vg, v) - 1, 0, len(vg) - 2))
+        f = min(max((v - vg[i]) / (vg[i + 1] - vg[i]), 0.0), 1.0)
+        row = (1 - f) * tab[i] + f * tab[i + 1]
+        return float(row[-1]), float(np.interp(0.0, ug, row)), float(row[0])
+
     def a_lat(self, s_line):
         i = bisect.bisect_right(self._starts, s_line) - 1  # -1 wraps to last section
         return self._vals[i]
@@ -144,6 +152,36 @@ class Vehicle:
     def brake_sec(self, s_line):
         """Braking scale of the section at s_line (1.0 unless brake_sec_scale is set)."""
         return self._bss[bisect.bisect_right(self._starts, s_line) - 1]
+
+
+class BinaryPedals:
+    """Deliver an accel command as full throttle / lift / full brake (the winner's pedals are on/off 97 % of the
+    time while cornering; ours were partial 28 %). Error-accumulating (delta-sigma) so the average follows the
+    command, with a minimum hold of `dwell` ticks per state so it does not buzz. Active while cornering (a_y >
+    ay_min) or braking (command below the lift accel); otherwise the normal map is used and the error is cleared."""
+
+    STATES = ((1.0, 0.0), (0.0, 0.0), (0.0, 1.0))
+
+    def __init__(self, veh, dwell=3, ay_min=8.0, err_max=60.0):
+        self.veh, self.dwell, self.ay_min, self.err_max = veh, int(dwell), float(ay_min), float(err_max)
+        self.err, self.state, self.held = 0.0, None, 0
+
+    def __call__(self, a_cmd, v, a_y):
+        lv = self.veh.pedal_levels(v)
+        if not (a_y > self.ay_min or a_cmd < lv[1]):
+            self.err, self.state, self.held = 0.0, None, 0
+            return None
+        if self.state is not None and self.held < self.dwell:
+            k = self.state
+        else:
+            target = a_cmd + self.err
+            k = int(np.argmin([abs(target - a) for a in lv]))
+            if k != self.state:
+                self.state, self.held = k, 0
+        self.held += 1
+        self.err = float(np.clip(self.err + a_cmd - lv[k], -self.err_max, self.err_max))
+        return self.STATES[k]
+
 
 
 def load_profile(path, speed_scale=1.0):
