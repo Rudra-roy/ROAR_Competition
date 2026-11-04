@@ -69,7 +69,12 @@ class Vehicle:
         return min(self.K(v), self.a_lat_max / (v * v))
 
     def steer_for(self, kappa, v):
-        return float(np.clip(-kappa / self.K(v), -1.0, 1.0))
+        u = float(np.clip(-kappa / self.K(v), -1.0, 1.0))
+        cap = self.p.get("steer_cap")  # [[v, |steer| max], ...]: past the tyres' peak more steer only scrubs speed
+        if cap:
+            c = float(np.interp(v, [a for a, _ in cap], [b for _, b in cap]))
+            u = min(max(u, -c), c)
+        return u
 
     def pedals_for(self, a_cmd, v):
         if self._pm is not None:

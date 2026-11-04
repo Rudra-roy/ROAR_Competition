@@ -127,3 +127,20 @@ def test_brake_model_rejects_non_concave():
     import pytest
     with pytest.raises(ValueError):
         Vehicle(dict(V.p, brake_model="pedal_map", pedal_map=pm)).brake_lines()
+
+
+def test_steer_cap_optional_and_speed_dependent():
+    import json, os
+    from vehicle import Vehicle
+    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
+    p.pop("steer_cap", None)
+    free = Vehicle(p)
+    big = -0.5 * free.K(40.0)  # asks steer 0.5
+    assert abs(free.steer_for(big, 40.0) - 0.5) < 1e-9
+    p["steer_cap"] = [[25.0, 1.0], [30.0, 0.07], [80.0, 0.07]]
+    capped = Vehicle(p)
+    assert abs(capped.steer_for(big, 40.0) - 0.07) < 1e-9
+    assert abs(capped.steer_for(-big, 40.0) + 0.07) < 1e-9
+    assert abs(capped.steer_for(-0.5 * capped.K(20.0), 20.0) - 0.5) < 1e-9  # below 25 m/s: uncapped
+    small = -0.03 * capped.K(40.0)
+    assert abs(capped.steer_for(small, 40.0) - 0.03) < 1e-9
