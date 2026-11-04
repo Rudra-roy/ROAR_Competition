@@ -17,6 +17,7 @@ def test_margins_on_a_circle(tmp_path):
     run = tmp_path / "run.csv"
     np.savetxt(run, np.c_[ls, e_y], delimiter=",", header="line_s,e_y", comments="")
     m = margins(str(run), circle, circle, wall=np.array([[r, -1.0], [r, 1.0]]), corners=[(L / 2 - 50, L / 2 + 10)])
-    assert abs(m["chicane_right"] - 3.5) < 0.02
-    assert abs(m["lap_max"] - 3.5) < 0.02
-    assert abs(m["corners"][0] - 2.0) < 0.02
+    tol = 0.06  # Track's smoothing spline puts the resampled circle within +-0.05 m of r
+    assert abs(m["chicane_right"] - 3.5) < tol
+    assert abs(m["lap_max"] - 3.5) < tol
+    assert abs(m["corners"][0] - 2.0) < tol
