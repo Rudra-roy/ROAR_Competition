@@ -186,3 +186,20 @@ def test_tyre_model_option_measures_sideslip_and_yaw_rate():
     assert abs(sol.last["r"] - 0.01 / sol.mpc.dt) < 1e-6
     assert sol.last["ok"] == 1
     assert np.isfinite(car.control["steer"]) and abs(car.control["steer"]) <= 1.0
+
+
+def test_start_blend_slides_reference_onto_the_line():
+    from submission import START_BLEND_M
+    sol, loc, rpy, vel, car = _sol()
+    sol._off = None
+    tr = sol.track
+    i = int(np.argmin(np.abs(tr.s - sol.profile_start_s)))
+    n = np.array([-np.sin(tr.psi[i]), np.cos(tr.psi[i])])
+    loc.val = np.r_[tr.xy[i] + 2.0 * n, 0.0]  # spawn 2 m left of the line
+    rpy.val = np.array([0.0, 0.0, tr.psi[i]])
+    vel.val = np.zeros(3)
+    asyncio.run(sol.step())
+    assert abs(sol._e_y0 - 2.0) < 0.05
+    assert abs(sol._ref(0.0, 2.0, 0.0)[0]) < 1e-9  # no error at the start
+    assert abs(sol._ref(0.5 * START_BLEND_M, 2.0, 0.0)[0] - 1.0) < 1e-9  # half way: 1 m of error
+    assert sol._ref(START_BLEND_M + 1, 2.0, 0.0)[0] == 2.0  # blended out

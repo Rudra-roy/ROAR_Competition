@@ -27,6 +27,9 @@ def _wrap(a):
 # The learned offset is fitted on flying laps; from the standing start the car is slower and drifts differently
 # (s45_1 lap 1: 0.73 m flying-lap offset sent the car 4.10 m off centre at line_s 218), so fade it in.
 OFFSET_FADE_M = (200.0, 1000.0)  # s_total over which the offset ramps 0 -> 1 after a (re)start
+# The car spawns ~2 m off the line (and a respawn can put it anywhere): instead of asking the MPC to close that at
+# once (a hard arc, then a flick back), the reference starts AT the car and slides onto the line over this distance.
+START_BLEND_M = 150.0
 
 
 def load_line_offset(path, track):
@@ -69,6 +72,7 @@ class RoarCompetitionSolution:
         self.progress = Progress(tr)
         # "model": "tyre" = slip-aware MPC (tyre_mpc.py, needs vehicle_params["tyre"]); else the kinematic FrenetMPC
         self.tyre = veh.p["mpc"].get("model") == "tyre"
+        self._e_y0 = None  # lateral offset at the (re)start, blended out over START_BLEND_M
         self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else \
             FrenetMPC(veh, dict(veh.p["mpc"], **veh.p.get("mpc_kinematic", {})))
         self._yaw_prev = None
@@ -101,11 +105,19 @@ class RoarCompetitionSolution:
         w = min(max((s_total - a) / (b - a), 0.0), 1.0)
         return w * float(np.interp(self._line_s(s_total), tr.s, self._off[k], period=tr.length))
 
+    def _start_blend(self, s_total):
+        """(offset, slope) of the start blend: e_y0 (1 - s/START_BLEND_M), 0 beyond."""
+        if self._e_y0 is None or s_total >= START_BLEND_M:
+            return 0.0, 0.0
+        return self._e_y0 * (1.0 - s_total / START_BLEND_M), -self._e_y0 / START_BLEND_M
+
     def _ref(self, s_total, e_y, e_psi):
-        """Errors w.r.t. the reference the MPC tracks: the racing line shifted by the learned offset (linearised)."""
+        """Errors w.r.t. the reference the MPC tracks: the racing line shifted by the learned offset (linearised)
+        plus the start blend."""
+        d0, d1 = self._start_blend(s_total)
         if self._off is None:
-            return e_y, e_psi
-        return e_y - self._off_at(s_total, 0), e_psi - self._off_at(s_total, 1)
+            return e_y - d0, e_psi - d1
+        return e_y - self._off_at(s_total, 0) - d0, e_psi - self._off_at(s_total, 1) - d1
 
     def _pursuit_kappa(self, p, yaw, s_total, lookahead):
         """Curvature of the arc from the car through the (offset) reference point `lookahead` m ahead on the line:
@@ -146,6 +158,8 @@ class RoarCompetitionSolution:
         r = float(_wrap(yaw - self._yaw_prev)) / self.mpc.dt if self._yaw_prev is not None else 0.0
         self._yaw_prev = yaw
         s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
+        if teleport or self._p_prev is None or self.tick == 0 or self._e_y0 is None:
+            self._e_y0 = e_y
         a_lat = self._a_lat(s_total)
         # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (tools/fit_sideslip.py),
         # so its velocity points outward. The MPC's e_y' = v*e_psi model assumes no slip: track the course instead by
