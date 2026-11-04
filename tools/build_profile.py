@@ -59,9 +59,13 @@ def build_profile(track, veh, start_s, laps=3, grid=2.0):
             ext[:, 3] = np.sin(th) / (c_el * veh.a_lat(line(q)))
             return np.vstack([F_base, ext])
 
+        nb = len(brk_g)
+
         def g(q):
-            al = veh.a_lat(line(q))
-            return np.array(g_fixed + [al, al, vmax2] + ([1.0] * len(th) if A is not None else []))
+            al, bs = veh.a_lat(line(q)), veh.brake_sec(line(q))
+            gf = list(g_fixed)
+            gf[-nb:] = [x * bs for x in brk_g]  # per-section braking scale
+            return np.array(gf + [al, al, vmax2] + ([1.0] * len(th) if A is not None else []))
 
         pc = constraint.SecondOrderConstraint(
             lambda q, qd, qdd: np.array([qdd[0], qd[0] ** 2, kappa(q) * qd[0] ** 2, abs(kappa(q)) * qd[0] ** 2]),
@@ -82,7 +86,7 @@ def build_profile(track, veh, start_s, laps=3, grid=2.0):
     if not len(th):
         return ss, solve(None)
     if bl is None:
-        return ss, solve(lambda q: a_brk)
+        return ss, solve(lambda q: a_brk * veh.brake_sec(line(q)))
     v = solve(None)
     for _ in range(ELLIPSE_PASSES):
         v_prev = v

@@ -256,8 +256,9 @@ class TyreMPC:
         return np.where(v < STEER_HOLD_V, 0.0, np.minimum(g, c0 + w * np.maximum(g - c0, 0.0)))
 
     # -- solve ----------------------------------------------------------------------------------------------------------
-    def solve(self, e_y, e_psi, v, beta, r, s_total, kappa_ref_fn, v_ref_fn, u_prev, a_lat_fn=None):
-        """-> (delta_cmd [rad, left +], a_cmd, ok). u_prev = (delta, a) issued last tick."""
+    def solve(self, e_y, e_psi, v, beta, r, s_total, kappa_ref_fn, v_ref_fn, u_prev, a_lat_fn=None, a_brk_fn=None):
+        """-> (delta_cmd [rad, left +], a_cmd, ok). u_prev = (delta, a) issued last tick. a_brk_fn(s_total): braking
+        scale of the section (per-section pedal braking); None = 1."""
         N, dt, veh, ty, nx, iu = self.N, self.dt, self.veh, self.ty, self.nx, self.iu
         a_lat_fn = a_lat_fn or (lambda s: veh.a_lat_max)
         d_prev, a_prev = float(u_prev[0]), float(u_prev[1])
@@ -281,7 +282,8 @@ class TyreMPC:
         c_beta, c_r, ay_c = self._write_dynamic(X, kr)
         vl = X[:, 2]
         g = np.array([ty.g(x) for x in vl[:N]])
-        a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]])
+        bs = np.array([a_brk_fn(x) for x in s[:N]], float) if a_brk_fn else np.ones(N)
+        a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]]) * bs
         ad = np.maximum([veh.a_drive(x) for x in vl[:N]], a_lo)
         q = self.q
         q[NX + 2:nx:NX] = -2 * self.q_v * vr

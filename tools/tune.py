@@ -80,6 +80,10 @@ def main():
         if k.startswith("sec"):
             p["a_lat_sections"][int(k[3:])][1] = float(val)
             rebuild = True
+        elif k.startswith("brk"):  # brkN=1.3: braking scale of section N (brake_sec_scale)
+            bss = p.setdefault("brake_sec_scale", [1.0] * len(p["a_lat_sections"]))
+            bss[int(k[3:])] = float(val)
+            rebuild = True
         elif k.startswith("pursuit."):  # pursuit.la0 / pursuit.la_k; pursuit.off=1 removes it
             if k == "pursuit.off":
                 p.pop("pursuit", None)

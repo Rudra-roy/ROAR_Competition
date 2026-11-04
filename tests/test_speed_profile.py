@@ -110,3 +110,26 @@ def test_pedal_brake_model_profile():
     assert brk.any() and use[brk].max() <= 1.06
     zone = lambda vv: np.ptp(s[:-1][(np.diff(vv) < 0) & (s[:-1] < 1950)])  # noqa: E731
     assert zone(v) < 0.9 * zone(vc)
+
+
+def test_brake_sec_scale_brakes_later_into_that_corner_only():
+    import json, os
+    import numpy as np
+    from build_profile import build_profile
+    from track import load_track
+    from vehicle import Vehicle
+    root = os.path.join(os.path.dirname(__file__), "..", "competition_code", "data")
+    p = json.load(open(os.path.join(root, "vehicle_params.json")))
+    p.pop("brake_sec_scale", None); p.pop("scrub", None); p["brake_ellipse_c"] = 1.0
+    tr = load_track(os.path.join(root, "racing_line.npz"))
+    start = tr.project(np.load(os.path.join(root, "centreline.npy"))[0])[1]
+    s, v0 = build_profile(tr, Vehicle(p), start, laps=1, grid=4.0)
+    p["brake_sec_scale"] = [1.0] * len(p["a_lat_sections"])
+    p["brake_sec_scale"][7] = 1.4
+    _, v1 = build_profile(tr, Vehicle(p), start, laps=1, grid=4.0)
+    ls = (start + s) % tr.length
+    s7, s8 = p["a_lat_sections"][7][0], p["a_lat_sections"][8][0]
+    inside = (ls >= s7) & (ls < s8)
+    assert v1[inside].mean() > v0[inside].mean() + 0.05  # brakes later/harder into that section
+    far = (ls > s8 + 400) | (ls < s7 - 400)
+    assert np.abs(v1[far] - v0[far]).max() < 0.3  # the rest of the lap is unchanged

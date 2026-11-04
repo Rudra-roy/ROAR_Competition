@@ -85,6 +85,7 @@ class RoarCompetitionSolution:
         self._v_ref_mpc = lambda s: max(self.v_ref(s), v_min)
         self._kappa_ref = lambda s: float(np.interp(self._line_s(s), tr.s, tr.kappa, period=tr.length))
         self._a_lat = lambda s: veh.a_lat(self._line_s(s))
+        self._a_brk = lambda s: veh.brake_sec(self._line_s(s))
         self._off = load_line_offset(os.path.join(DATA, "line_offset.npz"), tr)
         self.u_prev = (0.0, 0.0)
         self.tick = 0
@@ -178,7 +179,7 @@ class RoarCompetitionSolution:
 
         if self.tyre:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
-                                          self._v_ref_mpc, self.u_prev, self._a_lat)  # kappa = steer angle delta
+                                          self._v_ref_mpc, self.u_prev, self._a_lat, self._a_brk)  # kappa = delta
             self.u_prev = (kappa, a)
             steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))
         else:

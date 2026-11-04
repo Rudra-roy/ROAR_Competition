@@ -158,3 +158,19 @@ def test_scrub_off_by_default_and_conservative_chords():
         assert abs(v.scrub(x) - y) < 1e-9  # passes through the fitted points
     assert abs(v.scrub(15) - 1.35) < 1e-9  # linear between them
     assert v.scrub(5) >= 0.25 - 1e-9
+
+
+def test_brake_sec_scale_default_and_per_section():
+    import json, os
+    from vehicle import Vehicle
+    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
+    p.pop("brake_sec_scale", None)
+    v = Vehicle(p)
+    assert v.brake_sec(100.0) == 1.0 and v.brake_sec(5000.0) == 1.0
+    n = len(p["a_lat_sections"])
+    p["brake_sec_scale"] = [1.0] * n
+    p["brake_sec_scale"][7] = 1.3
+    v = Vehicle(p)
+    s7, s8 = p["a_lat_sections"][7][0], p["a_lat_sections"][8][0]
+    assert v.brake_sec(0.5 * (s7 + s8)) == 1.3
+    assert v.brake_sec(s7 - 1.0) == 1.0 and v.brake_sec(s8 + 1.0) == 1.0

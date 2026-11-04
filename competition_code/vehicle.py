@@ -16,6 +16,12 @@ class Vehicle:
         self._starts = [s for s, _ in secs]
         self._vals = [a for _, a in secs]
         self.a_lat_max = max(self._vals)
+        # per-section braking scale (same sections as a_lat_sections; absent = 1 everywhere): a corner can brake
+        # harder with the pedal than the global limit (a_brake * brake_scale) without it applying to every corner
+        bss = params.get("brake_sec_scale")
+        self._bss = [float(x) for x in bss] if bss else [1.0] * len(secs)
+        if len(self._bss) != len(secs):
+            raise ValueError("brake_sec_scale needs one value per a_lat section")
         pm = params.get("pedal_map")
         self._pm = None
         if pm:  # measured steady-state accel on one signed pedal axis u = throttle - brake (exclusive pedals)
@@ -109,6 +115,10 @@ class Vehicle:
     def a_lat(self, s_line):
         i = bisect.bisect_right(self._starts, s_line) - 1  # -1 wraps to last section
         return self._vals[i]
+
+    def brake_sec(self, s_line):
+        """Braking scale of the section at s_line (1.0 unless brake_sec_scale is set)."""
+        return self._bss[bisect.bisect_right(self._starts, s_line) - 1]
 
 
 def load_profile(path, speed_scale=1.0):
