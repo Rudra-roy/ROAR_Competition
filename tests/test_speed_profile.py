@@ -85,3 +85,28 @@ def test_predicted_flying_lap_plausible(real):
     tr, _, s, v = real
     t = lap_times(s, v, tr.length)
     assert len(t) == 3 and 95 <= t[1] <= 125
+
+
+def test_pedal_brake_model_profile():
+    """brake_model pedal_map: decel <= a_brake_max(v) everywhere, the friction ellipse uses a_brake_max at the
+    profile's own speed, and a high-speed braking zone gets shorter than with the constant limit."""
+    c = 1.0
+    veh = Vehicle(dict(BOX.p, brake_ellipse_c=c, brake_model="pedal_map", brake_scale=1.0))
+    const = Vehicle(dict(BOX.p, brake_ellipse_c=c, brake_scale=1.0))
+    L = 3000.0
+    s0 = np.arange(0.0, L, 1.0)
+    kap = np.where((s0 > 1900) & (s0 < 2100), 0.02, 0.0)
+    tr = SimpleNamespace(length=L, s=s0, kappa=kap)
+    s, v = build_profile(tr, veh, 0.0, laps=1)
+    _, vc = build_profile(tr, const, 0.0, laps=1)
+    a_long = np.diff(v ** 2) / (2 * np.diff(s))
+    vm = 0.5 * (v[1:] + v[:-1])
+    amax = np.array([veh.a_brake_max(x) for x in vm])
+    assert (a_long >= -amax - 0.3).all()
+    k = np.interp(0.5 * (s[1:] + s[:-1]), s0, kap)
+    al = np.array([veh.a_lat(x) for x in s[1:]])
+    brk = a_long < -0.5
+    use = (a_long / amax) ** 2 + (vm ** 2 * k / (c * al)) ** 2
+    assert brk.any() and use[brk].max() <= 1.06
+    zone = lambda vv: np.ptp(s[:-1][(np.diff(vv) < 0) & (s[:-1] < 1950)])  # noqa: E731
+    assert zone(v) < 0.9 * zone(vc)

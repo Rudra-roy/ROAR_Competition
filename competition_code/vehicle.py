@@ -25,6 +25,27 @@ class Vehicle:
                 tab[:, j] = np.minimum(tab[:, j], tab[:, j + 1] - 1e-3)
             self._pm = (np.asarray(pm["v"], float), u, tab)
 
+    def a_brake_max(self, v):
+        """Largest deceleration (> 0) at speed v. Default: the constant a_brake * brake_scale. brake_model
+        "pedal_map": brake_scale * the measured full-brake decel of the pedal map, linear in v^2 between grid speeds
+        (clamped outside), so the offline profile can use the same function as linear constraints (brake_lines)."""
+        if self.p.get("brake_model") != "pedal_map":
+            return self.a_brake * self.brake_scale
+        pm = self.p["pedal_map"]
+        return self.brake_scale * float(np.interp(v * v, np.square(pm["v"]), -np.asarray(pm["a_brk"])[:, -1]))
+
+    def brake_lines(self):
+        """None for the constant model; else [(c, d)] with a_brake_max(v) = min_i(c_i + d_i v^2) on the grid range:
+        the chords between grid speeds. Exact only if the table is concave in v^2 (checked)."""
+        if self.p.get("brake_model") != "pedal_map":
+            return None
+        pm = self.p["pedal_map"]
+        x, y = np.square(pm["v"]), -self.brake_scale * np.asarray(pm["a_brk"])[:, -1]
+        d = np.diff(y) / np.diff(x)
+        if (np.diff(d) > 1e-12).any():
+            raise ValueError("full-brake decel is not concave in v^2: chords would not bound it")
+        return [(float(y[i] - d[i] * x[i]), float(d[i])) for i in range(len(d))]
+
     @classmethod
     def from_json(cls, path):
         with open(path) as f:

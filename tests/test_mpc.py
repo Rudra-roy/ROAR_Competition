@@ -357,3 +357,20 @@ def test_sideslip_option_needs_tau_and_clamps_rate():
     m = FrenetMPC(V, dict(NO_BETA, beta_k=0.007, beta_tau_s=0.01))  # tau < dt: the lag row must not overshoot
     assert m.cb == 1.0
     assert m.solve(0.3, 0.0, 50.0, 0.0, lambda s: 0.0, lambda s: 50.0, (0.0, 0.0))[2]
+
+
+def test_pedal_brake_model_bounds_a_by_speed():
+    """brake_model pedal_map: the a_cmd lower bound is -a_brake_max(v_k), so far above v_ref the MPC brakes harder
+    than the constant limit at high speed and never asks for more than the car has at low speed."""
+    vb = Vehicle(dict(V.p, brake_model="pedal_map"))
+    for v in (25.0, 45.0, 65.0):
+        m = FrenetMPC(vb, CFG)
+        raw = capture(m)
+        a = None
+        for _ in range(30):  # let the jerk limit ramp the command down
+            k, a, ok = m.solve(0.0, 0.0, v, 0.0, lambda s: 0.0, lambda s: 5.0, (0.0, a or 0.0))
+            assert ok
+        lo = -vb.a_brake_max(v + DT * a)  # the bound is taken at the delay-propagated speed (v + dt*a_act)
+        assert lo - 1e-2 <= a <= lo + 0.3, (v, a, lo)
+        assert raw[-1][m.iu + 1] >= lo - 0.3
+    assert vb.a_brake_max(65.0) > -A_MIN > vb.a_brake_max(25.0)

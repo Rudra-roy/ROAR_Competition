@@ -2,7 +2,7 @@
 
   python tools/tune.py <label> <runs> [speed_scale=0.9] [brake_scale=1.1] [sec7=30.1] [--dry] [--keep-going]
 
-secN=value sets a_lat_sections[N]; mpc.key=value sets vehicle_params["mpc"][key]. A profile rebuild runs when brake_scale, brake_ellipse_c or a section changes. Each run is a
+secN=value sets a_lat_sections[N]; mpc.key=value sets vehicle_params["mpc"][key]. A profile rebuild runs when brake_scale, brake_ellipse_c, brake_model or a section changes; non-numeric values stay strings. Each run is a
 separate `eval.sh 1 <label>` with ROAR_LOG=1; its run.csv is kept as logs/<label>_<i>.run.csv and summarised
 (max|e_y|, top speed, crash line_s, per-section sim time vs predicted). --dry edits + rebuilds + predicts only.
 Stops after the first unclean run unless --keep-going.
@@ -83,8 +83,11 @@ def main():
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(val)
         else:
-            p[k] = float(val)
-            rebuild |= k in ("brake_scale", "brake_ellipse_c")
+            try:
+                p[k] = float(val)
+            except ValueError:  # e.g. brake_model=pedal_map
+                p[k] = val
+            rebuild |= k in ("brake_scale", "brake_ellipse_c", "brake_model")
     with open(PARAMS, "w") as f:
         json.dump(p, f, indent=2)
     if rebuild:

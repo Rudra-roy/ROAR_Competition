@@ -12,7 +12,8 @@ s_k is integrated from v_k.
 One-tick delay: the measured state is propagated one step with u_prev and u_0 is the command for the next tick.
 a_act and k_act are not measured. FrenetMPC keeps them as internal state: the lag filters run over the issued
 commands, which equal the previous solve's predictions at this tick. On the first call they start at u_prev (settled).
-Constraints: |kappa_k| <= K(v_k) (steering), a_min <= a_k <= a_drive(v_k), and the lateral-acceleration limit
+Constraints: |kappa_k| <= K(v_k) (steering), -a_brake_max(v_k) <= a_k <= a_drive(v_k) (a_brake_max = -a_min unless
+vehicle_params brake_model makes it speed-dependent), and the lateral-acceleration limit
 |kappa| <= a_lat/v^2 as its tangent at v_t = max(v_k, V_TAN_MIN): +-kappa + (2a/v_t^3) v <= 3a/v_t^2. a/v^2 is
 convex, so every tangent is an inner bound, and it couples v and kappa: slowing down buys curvature.
 |e_y| <= ey_max is soft with an L1 exact penalty (plus a small quadratic term).
@@ -205,7 +206,8 @@ class FrenetMPC:
         if not all(np.isfinite(a).all() for a in (x0, vl, kr, vr, al)):
             return self._fallback(x0, kr[0], vr[0], al_raw[0])  # never let a NaN into the solver
         ks = np.array([veh.K(x) for x in vl[:N]])
-        ad = np.maximum([veh.a_drive(x) for x in vl[:N]], self.a_min)
+        a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]])  # = a_min unless brake_model makes it v-dependent
+        ad = np.maximum([veh.a_drive(x) for x in vl[:N]], a_lo)
         vt = np.maximum(vl[:N], V_TAN_MIN)
 
         self.vals[self.vidx] = -dt * vl[:N, None]
@@ -221,10 +223,10 @@ class FrenetMPC:
         if self.kb:
             l[NX + 5:nx:NX] = u[NX + 5:nx:NX] = -self.cb * self.kb * vl[:N] ** 2 * kr
         l[nx:rl:2], u[nx:rl:2] = -ks, ks
-        l[nx + 1:rl:2], u[nx + 1:rl:2] = self.a_min, ad
+        l[nx + 1:rl:2], u[nx + 1:rl:2] = a_lo, ad
         if self.jerk:  # a_0 within jerk_max*dt of the command being applied now (empty -> keep the box's upper end)
             u[nx + 1] = min(ad[0], a_prev + self.jerk * dt)
-            l[nx + 1] = min(max(self.a_min, a_prev - self.jerk * dt), u[nx + 1])
+            l[nx + 1] = min(max(a_lo[0], a_prev - self.jerk * dt), u[nx + 1])
         u[rl:rl + 2 * N] = np.repeat(3 * al / vt ** 2, 2)
         self.solver.update(Ax=(self.vals * self.sc)[self.perm], q=q * self.sz, l=l / self.sr, u=u / self.sr)
         z = self._run()

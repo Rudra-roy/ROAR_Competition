@@ -103,3 +103,27 @@ def test_load_profile_interp_scale_clamp(tmp_path):
     assert abs(vr(15.0) - 12.5) < 1e-9
     assert vr(1e6) == 15.0
     assert load_profile(str(f))(10.0) == 20.0
+
+
+PB = Vehicle(dict(V.p, brake_model="pedal_map"))
+
+
+def test_brake_model_pedal_map():
+    """a_brake_max(v) = brake_scale * the measured full-brake decel, piecewise linear in v^2 between grid speeds;
+    brake_lines are its chords (min over them = the same function). Default: the constant a_brake * brake_scale."""
+    full = -np.array(PM["a_brk"])[:, -1]
+    for v, a in zip(PM["v"], full):
+        assert abs(PB.a_brake_max(v) - PB.brake_scale * a) < 1e-9
+    assert abs(V.a_brake_max(60.0) - V.a_brake * V.brake_scale) < 1e-12 and V.brake_lines() is None
+    for v in np.linspace(0, 80, 161):
+        assert abs(min(c + d * v * v for c, d in PB.brake_lines()) - PB.a_brake_max(v)) < 1e-9
+    v2 = np.array(PM["v"]) ** 2
+    mid = (v2[3] + v2[4]) / 2  # between 30 and 40 m/s: linear in v^2
+    assert abs(PB.a_brake_max(np.sqrt(mid)) - PB.brake_scale * (full[3] + full[4]) / 2) < 1e-9
+
+
+def test_brake_model_rejects_non_concave():
+    pm = dict(PM, a_brk=[r[:-1] + [-30.0 if i == 4 else r[-1]] for i, r in enumerate(PM["a_brk"])])
+    import pytest
+    with pytest.raises(ValueError):
+        Vehicle(dict(V.p, brake_model="pedal_map", pedal_map=pm)).brake_lines()
