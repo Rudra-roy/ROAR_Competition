@@ -107,3 +107,17 @@ def test_deterministic_and_fast():
         outs.append(res)
     assert outs[0] == outs[1]
     assert np.median(t) / 2 < 0.03
+
+
+def test_low_speed_steer_hold_and_cap():
+    veh, m = make()
+    kappa = 0.0
+    for v, lim in ((0.1, 0.0), (4.0, 0.2), (30.0, m.ty.g(30.0))):
+        m.reset()
+        d, a, ok = m.solve(2.0, 0.03, v, 0.0, 0.0, 10.0, lambda s: kappa, lambda s: 20.0, (0.0, 0.0),
+                           lambda s: veh.a_lat_max)
+        assert ok
+        assert abs(d) <= lim + 1e-9, (v, d)
+    m.reset()
+    d, _, _ = m.solve(2.0, 0.03, 4.0, 0.0, 0.0, 10.0, lambda s: kappa, lambda s: 20.0, (0.0, 0.0), lambda s: veh.a_lat_max)
+    assert d < -0.03  # 2 m left of the line: steers right (first solve: one trust-region step)

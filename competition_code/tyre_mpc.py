@@ -28,6 +28,9 @@ MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0, 0.05, 0.05, 0.5), (0.05, 5.0)
 K_V_FALLBACK = 2.0
 MAX_ITER = 8000
 F_SAT = 0.95  # inverse tyre map clip (|F| < F_SAT mu) for steady-state nominals
+STEER_HOLD_V = 2.0  # m/s: below this the steer command is 0 (no wind-up while the car sits at the spawn)
+STEER_CAP_LOW = (0.2, 8.0, 12.0)  # |delta| <= 0.2 rad below 8 m/s, ramping to full lock by 12 m/s: a 2 m spawn
+# offset is closed in a gentle arc instead of full lock at walking pace, a 14 deg slide and a counter-steer
 V_FLOOR = 10.0  # m/s: the lateral model's 1/v terms use max(v, V_FLOOR) (Euler at dt 0.05 is stable above ~8 m/s;
 # below it the fit had no data and the car is pulling away in a straight line anyway)
 
@@ -246,6 +249,12 @@ class TyreMPC:
         self.vals[self.ayidx] = np.c_[Gf1, -(Gf1 + Gr1), (-Gf1 * ty.a + Gr1 * ty.b) / v1][:, None, :]
         return c_beta, c_r, Ff1 + Fr1 - Gf1 * af1 - Gr1 * ar1
 
+    def _delta_cap(self, v, g):
+        """Per-step |delta_cmd| bound: 0 when stationary, a low-speed cap, then full lock g(v)."""
+        c0, v0, v1 = STEER_CAP_LOW
+        w = np.clip((v - v0) / (v1 - v0), 0.0, 1.0)
+        return np.where(v < STEER_HOLD_V, 0.0, np.minimum(g, c0 + w * np.maximum(g - c0, 0.0)))
+
     # -- solve ----------------------------------------------------------------------------------------------------------
     def solve(self, e_y, e_psi, v, beta, r, s_total, kappa_ref_fn, v_ref_fn, u_prev, a_lat_fn=None):
         """-> (delta_cmd [rad, left +], a_cmd, ok). u_prev = (delta, a) issued last tick."""
@@ -283,8 +292,9 @@ class TyreMPC:
         l[NX + 5:nx:NX] = u[NX + 5:nx:NX] = c_beta
         l[NX + 6:nx:NX] = u[NX + 6:nx:NX] = c_r
         rs = self.rs
-        l[nx:rs:2] = np.maximum(Ub[:, 0] - self.trust, -g)  # trust region round the nominal steer
-        u[nx:rs:2] = np.maximum(np.minimum(Ub[:, 0] + self.trust, g), l[nx:rs:2])
+        gc = self._delta_cap(vl[:N], g)
+        l[nx:rs:2] = np.maximum(Ub[:, 0] - self.trust, -gc)  # trust region round the nominal steer, within the cap
+        u[nx:rs:2] = np.maximum(np.minimum(Ub[:, 0] + self.trust, gc), l[nx:rs:2])
         l[nx + 1:rs:2], u[nx + 1:rs:2] = a_lo, ad
         if self.jerk:
             u[nx + 1] = min(ad[0], a_prev + self.jerk * dt)
@@ -317,7 +327,7 @@ class TyreMPC:
         alpha = math.atan2(0.5 * kref * Ld * Ld - e_y, Ld) - e_psi
         km = a_lat / max(v, 1.0) ** 2
         kappa = float(np.clip(2 * math.sin(alpha) / Ld, -km, km))
-        g = self.ty.g(v)
+        g = float(self._delta_cap(np.array([v]), np.array([self.ty.g(v)]))[0])
         delta = float(np.clip(self.ty.steady(kappa, v)[0], -g, g))
         a = float(np.clip(K_V_FALLBACK * (vref - v), self.a_min, self.veh.a_drive(v)))
         return delta, a, False
