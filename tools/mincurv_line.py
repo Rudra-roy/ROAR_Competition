@@ -1,6 +1,11 @@
-"""Minimum-curvature racing line inside the official Monza corridor -> competition_code/data/racing_line.npz.
+"""Minimum-curvature racing line -> competition_code/data/racing_line.npz.
 
-  python tools/mincurv_line.py competition_code/data/racing_line.npz [--remap-from OLD_LINE.npz]
+  python tools/mincurv_line.py competition_code/data/racing_line.npz [--straights OLD.npz] [--remap-from OLD.npz]
+
+Free mode (default) is the full min-curvature line in the waypoint corridor. Raced in Task 8e (mc8d): the lane
+polygon is not the physical corridor (hits at |d_centre| 2.8 and 4.0 in the first km), so it does not ship.
+--straights OLD.npz (shipped): the same QP in the raced line's own frame, moving only its straights (see
+smooth_straights); its corners stay exactly where the car has raced them.
 
 Method (ported from analysis/path_study.py, qp_offsets "curv"): offsets a along the normals of the smoothed
 centreline (Track of the official waypoints, 2 m), p = c + a n, minimise sum |kappa|^2 ds with kappa ~ second
@@ -25,6 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tools")]
 from export_line import offsets  # noqa: E402
 from track import Track  # noqa: E402
+from scipy.ndimage import gaussian_filter1d  # noqa: E402
 
 WP = os.path.join(os.path.dirname(ROOT), "ROAR_PY", "roar_py_carla", "roar_py_carla", "assets", "waypoints", "Monza.npz")
 DATA = os.path.join(ROOT, "competition_code", "data")
@@ -33,6 +39,10 @@ YAW_ALLOW = 0.3  # body corner reach at ~0.1 rad heading + tracking slop
 MAX_OFFSET = 4.0  # same wall cap as the export_line line
 SLACK = 0.05  # QP bound below the cap: smoothed vs polyline centreline + the runtime Track resampling
 DS = 2.0
+STRAIGHT_DELTA = 0.5  # m, max lateral move of the raced line on its straights
+STRAIGHT_KAPPA = 0.002  # 1/m, |kappa| (15 m smoothed) below which the raced line counts as straight
+WALL_OUTER = 3.5  # m |d_centre|: no move toward the near wall from here out (ramped over 0.5 m)
+WALL_IN = 3.95  # m |d_centre|: raced-line points beyond are pulled in to it (cap 4.0 incl. the Track resampling)
 ITERS = 4
 
 
@@ -100,6 +110,29 @@ def build(slack=SLACK):
     return qp_offsets(c, nrm, lo, hi)[0]
 
 
+def straight_weight(old_xy, kthr=STRAIGHT_KAPPA):
+    """Per raced-line point: 1 on its straights, 0 in corners, ramped over ~10 m; and the point's Track index."""
+    tr = Track(old_xy)
+    idx = np.array([tr.project(p)[0] for p in old_xy])
+    step = np.linalg.norm(np.roll(old_xy, -1, 0) - old_xy, axis=1).mean()
+    ks = gaussian_filter1d(np.abs(tr.kappa), 15 / tr.ds, mode="wrap")[idx]
+    return np.clip(2 * gaussian_filter1d((ks < kthr).astype(float), 10 / step, mode="wrap") - 1, 0, 1), tr, idx
+
+
+def smooth_straights(old_xy, centre, delta=STRAIGHT_DELTA):
+    """Min-curvature QP with offsets a along the raced line's own normals: |a| <= delta * w (w = straight_weight),
+    no move toward the near wall beyond WALL_OUTER, points beyond WALL_IN pulled in to it. Removes the raced line's
+    curvature wiggle on the straights (the weave the MPC follows, Task 8e) and leaves its corners as raced."""
+    w, tr, idx = straight_weight(old_xy)
+    nrm = np.c_[-np.sin(tr.psi[idx]), np.cos(tr.psi[idx])]  # left normal, same sense as the centreline's
+    dc = offsets(old_xy, centre)[0]
+    out = delta * w * np.clip((WALL_OUTER - np.abs(dc)) / 0.5, 0, 1) + np.minimum(WALL_IN - np.abs(dc), 0)
+    lo = np.where(dc > 0, -delta * w, -out)  # the near wall is on the +n side when dc > 0
+    hi = np.where(dc > 0, out, delta * w)
+    lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
+    return qp_offsets(old_xy, nrm, lo, hi)[0]
+
+
 def remap_s(old_tr, new_tr, s):
     p = [np.interp(s % old_tr.length, old_tr.s, old_tr.xy[:, k], period=old_tr.length) for k in (0, 1)]
     return new_tr.project(np.array(p))[1]
@@ -114,13 +147,15 @@ def remap_sections(old_xy, new_xy, sections):
     return [[s1, a] for s1, _, a in rows]
 
 
-def main(out, remap_from=None):
+def main(out, remap_from=None, straights=None):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
     for slack in (SLACK, 2 * SLACK, 4 * SLACK):  # tighten until the resampled line is within the cap
-        xy = build(slack)
+        xy = build(slack) if straights is None else smooth_straights(straights, centre)
         dmax = max(np.abs(offsets(xy, centre)[0]).max(), np.abs(offsets(Track(xy).xy, centre)[0]).max())
         if dmax <= MAX_OFFSET:
             break
+        if straights is not None:
+            raise RuntimeError("line exceeds the %.1f m cap: %.3f" % (MAX_OFFSET, dmax))
     else:
         raise RuntimeError("line exceeds the %.1f m cap: %.3f" % (MAX_OFFSET, dmax))
     tr = Track(xy, ds=1.0)
@@ -141,5 +176,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--remap-from")
+    ap.add_argument("--straights", metavar="OLD_LINE.npz")
     a = ap.parse_args()
-    main(a.out, a.remap_from)
+    main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"])
