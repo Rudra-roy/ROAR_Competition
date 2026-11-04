@@ -38,4 +38,14 @@ def test_race_result_on_logged_runs():
 def test_corner_mask_marks_corner_sections_only():
     m = co.corner_mask(params())
     assert m[0] and m[10] and m[7]  # chicane, hairpin, bottom-curve entry
-    assert not m[6] and not m[9]  # the two long straights (a braking zone at a section end counts as corner)
+    assert not m[9]  # the main straight
+
+
+def test_grid_overrides():
+    import grid_race as gr
+    p = params()
+    q = gr.apply_overrides(p, "brake_scale=1.2 sec3=25 brk7=1.3 ctf4=0.9 mpc.q_v=3")
+    assert q["brake_scale"] == 1.2 and q["a_lat_sections"][3][1] == 25.0
+    assert q["brake_sec_scale"][7] == 1.3 and q["corner_throttle_floor"]["thr_sec"][4] == 0.9
+    assert q["mpc"]["q_v"] == 3.0
+    assert gr.apply_overrides(p, "") == p

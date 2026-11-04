@@ -91,6 +91,9 @@ class TyreMPC:
         self.a_lat_margin = float(cfg.get("a_lat_margin", 1.0))
         self.alpha_max = math.radians(float(cfg.get("alpha_max_deg", 7.0)))
         self.jerk = cfg.get("jerk_max")
+        # brake_ellipse: braking shares grip with cornering, (a/A)^2 + (a_y/(c a_lat))^2 <= 1 with a_y the nominal
+        # trajectory's lateral force (c = brake_ellipse_c): full braking in a straight line, less as the car turns
+        self.brake_ellipse = bool(cfg.get("brake_ellipse", 0))
         self.k_lin = 0.5 * c / dt
         self.nx, nu = nx, nu = NX * (N + 1), NU * N
         self.iu = iu = nx
@@ -284,6 +287,11 @@ class TyreMPC:
         g = np.array([ty.g(x) for x in vl[:N]])
         bs = np.array([a_brk_fn(x) for x in s[:N]], float) if a_brk_fn else np.ones(N)
         a_lo = -np.array([veh.a_brake_max(x) for x in vl[:N]]) * bs
+        if self.brake_ellipse:
+            c_el = veh.p.get("brake_ellipse_c", 1.0)
+            ay_nom = np.abs(ay_c + (self.vals[self.ayidx[:, 0, :]] * X[1:, 4:7]).sum(1))  # a_y at the nominal x_{k+1}
+            share = np.sqrt(np.clip(1.0 - (ay_nom / (c_el * np.maximum(al, 1.0))) ** 2, 0.15, 1.0))
+            a_lo = a_lo * share
         ad = np.maximum([veh.a_drive(x) for x in vl[:N]], a_lo)
         q = self.q
         q[NX + 2:nx:NX] = -2 * self.q_v * vr

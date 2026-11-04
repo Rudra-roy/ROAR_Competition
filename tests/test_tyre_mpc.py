@@ -121,3 +121,18 @@ def test_low_speed_steer_hold_and_cap():
     m.reset()
     d, _, _ = m.solve(2.0, 0.03, 4.0, 0.0, 0.0, 10.0, lambda s: kappa, lambda s: 20.0, (0.0, 0.0), lambda s: veh.a_lat_max)
     assert d < -0.03  # 2 m left of the line: steers right (first solve: one trust-region step)
+
+
+def test_brake_ellipse_limits_braking_while_cornering():
+    veh, m = make(brake_ellipse=1)
+    _, m0 = make()
+    kappa = 1.0 / 60.0
+    v = 40.0  # a_y = 26.7: near the grip limit
+    d_ss, b_ss, r_ss = m.ty.steady(kappa, v)
+    args = (0.0, -b_ss, v, b_ss, r_ss, 100.0, lambda s: kappa, lambda s: 10.0, (d_ss, -14.0), lambda s: 28.0)
+    a_el = m.solve(*args)[1]
+    a_free = m0.solve(*args)[1]
+    assert a_free < -12.0  # without coupling it brakes hard mid-corner
+    assert a_el > a_free + 3.0  # with it, much less
+    straight = (0.0, 0.0, v, 0.0, 0.0, 100.0, lambda s: 0.0, lambda s: 10.0, (0.0, -14.0), lambda s: 28.0)
+    assert abs(m.solve(*straight)[1] - m0.solve(*straight)[1]) < 1.0  # straight line: unchanged
