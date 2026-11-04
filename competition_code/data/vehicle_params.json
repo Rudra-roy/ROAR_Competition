@@ -88,7 +88,7 @@
   "mpc": {
     "N": 60,
     "dt": 0.05,
-    "q_ey": 10,
+    "q_ey": 150.0,
     "q_epsi": 200,
     "q_v": 2.0,
     "r_dkappa": 200000.0,
@@ -100,8 +100,10 @@
     "a_tau_s": 0.225,
     "model": "tyre",
     "r_ddelta": 24000.0,
-    "alpha_max_deg": 7.0,
-    "trust_delta": 0.04
+    "alpha_max_deg": 20.0,
+    "trust_delta": 0.04,
+    "q_beta": 3000.0,
+    "q_r": 100.0
   },
   "pedal_map": {
     "v": [
@@ -392,5 +394,9 @@
       1.243
     ],
     "dt": 0.05
+  },
+  "mpc_kinematic": {
+    "q_v": 0.5,
+    "r_da": 0.01
   }
 }

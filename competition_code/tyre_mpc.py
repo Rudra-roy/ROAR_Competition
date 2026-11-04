@@ -100,6 +100,7 @@ class TyreMPC:
         W[0, 0], W[2, 2] = cfg["q_ey"], cfg["q_v"]
         W[1, 1] = W[1, 5] = W[5, 1] = cfg["q_epsi"]
         W[5, 5] = cfg["q_epsi"] + cfg.get("q_beta", 0.0)
+        W[6, 6] = self.q_r = float(cfg.get("q_r", 0.0))  # (r - v kappa_ref)^2: damps the yaw mode the plan can excite
         D = sp.eye(N) - sp.eye(N, k=-1)
         self.r = np.array([cfg.get("r_ddelta", 2e3), cfg["r_da"]])
         self.trust = float(cfg.get("trust_delta", 0.04))  # rad, |delta_cmd - nominal| per solve (SQP trust region)
@@ -275,6 +276,7 @@ class TyreMPC:
         ad = np.maximum([veh.a_drive(x) for x in vl[:N]], a_lo)
         q = self.q
         q[NX + 2:nx:NX] = -2 * self.q_v * vr
+        q[NX + 6:nx:NX] = -2 * self.q_r * vl[1:] * np.r_[kr[1:], kr[-1]]
         q[iu:iu + NU] = -2 * self.r * (d_prev, a_prev)
         l, u = self.l, self.u
         l[:NX] = u[:NX] = x0

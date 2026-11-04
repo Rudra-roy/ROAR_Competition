@@ -8,7 +8,7 @@ from profile_oracle import oracle_profile
 from vehicle import Vehicle
 
 V = Vehicle.from_json(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json"))
-CFG = V.p["mpc"]
+CFG = dict(V.p["mpc"], **V.p.get("mpc_kinematic", {}))  # the kinematic MPC's own cost keys
 DT = CFG["dt"]
 TAU = CFG.get("a_tau_s", V.p["brake_tau_s"])  # the shipped config's longitudinal lag
 OPTS = ("a_tau_s", "jerk_max", "ellipse", "a_lat_margin", "beta_k", "beta_tau_s")

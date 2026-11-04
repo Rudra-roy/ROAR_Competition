@@ -72,6 +72,8 @@ def main(argv=None):
     ap.add_argument("--sigma", type=float, default=8.0)
     ap.add_argument("--cap", type=float, default=2.5)
     ap.add_argument("--target-cap", type=float, default=TARGET_CAP)
+    ap.add_argument("--pull", action="append", default=[], metavar="A:B:M",
+                    help="extra target: move M m toward the centreline over line_s A..B (cosine-blended 30 m)")
     a = ap.parse_args(argv)
     tr = load_track(LINE)
     prev = np.zeros(len(tr.s))
@@ -80,7 +82,13 @@ def main(argv=None):
         prev = np.interp(tr.s, f["s"], f["d"], period=tr.length)
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     from mincurv_line import signed_offset
-    t = smooth_periodic(target(signed_offset(tr.xy, np.load(CENTRE)[:, :2]), a.target_cap), tr.ds, a.sigma)
+    lo = signed_offset(tr.xy, np.load(CENTRE)[:, :2])
+    t = target(lo, a.target_cap)
+    for spec in a.pull:
+        s0, s1, mag = (float(x) for x in spec.split(":"))
+        w = np.clip(np.minimum(tr.s - s0, s1 - tr.s) / 30.0 + 1.0, 0.0, 1.0)  # 1 inside, ramps 30 m outside
+        t = t - w * mag * np.sign(lo)
+    t = smooth_periodic(t, tr.ds, a.sigma)
     err = np.mean([lap_error(r, tr.s, tr.length) for r in a.runs], axis=0) - t
     d = update(prev, err, tr.ds, a.gamma, a.sigma, a.cap)
     d2 = (np.roll(d, -1) - 2 * d + np.roll(d, 1)) / tr.ds ** 2

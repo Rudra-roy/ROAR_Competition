@@ -69,7 +69,8 @@ class RoarCompetitionSolution:
         self.progress = Progress(tr)
         # "model": "tyre" = slip-aware MPC (tyre_mpc.py, needs vehicle_params["tyre"]); else the kinematic FrenetMPC
         self.tyre = veh.p["mpc"].get("model") == "tyre"
-        self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else FrenetMPC(veh, veh.p["mpc"])
+        self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else \
+            FrenetMPC(veh, dict(veh.p["mpc"], **veh.p.get("mpc_kinematic", {})))
         self._yaw_prev = None
         prof = os.path.join(DATA, "speed_profile.npz")
         self.v_ref = load_profile(prof, speed_scale=veh.p["speed_scale"])
