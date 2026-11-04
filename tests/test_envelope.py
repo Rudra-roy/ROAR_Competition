@@ -66,11 +66,11 @@ def test_outside_reports_car_beyond_the_raw_envelope():
 
 def test_check_bounds_union_of_driven_paths_widened_to_the_centre_side():
     """Car rule: never further out than our line, S25 or our e115 car went; the side facing the centreline gets 0.3 m
-    (not past the centreline). Ours +1, S25 +2.5, car +1.5 -> [0.7, 2.5]; ours -3, S25 -2, car -2.5 -> [-3, -1.7];
-    ours +0.1, S25 +1 -> [0, 1]."""
+    toward it. Ours +1, S25 +2.5, car +1.5 -> [0.7, 2.5]; ours -3, S25 -2, car -2.5 -> [-3, -1.7]; ours +0.1,
+    S25 +1 -> [-0.2, 1]."""
     from envelope import check_bounds
     for d_ours, d_s25, d_car, want in ((1.0, 2.5, 1.5, (0.7, 2.5)), (-3.0, -2.0, -2.5, (-3.0, -1.7)),
-                                       (0.1, 1.0, 0.5, (0.0, 1.0))):
+                                       (0.1, 1.0, 0.5, (-0.2, 1.0))):
         st, lo, hi = check_bounds(_circle(R, -d_ours), [_circle(R, -d_s25, n=2000, laps=1.1),
                                                         _circle(R, -d_car, n=2500, laps=1.1)], CENTRE)
         assert np.allclose(lo, want[0], atol=0.03) and np.allclose(hi, want[1], atol=0.03)

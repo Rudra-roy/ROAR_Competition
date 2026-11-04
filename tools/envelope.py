@@ -77,14 +77,14 @@ def envelope(line_xy, s25_xy, centre, shrink=SHRINK, cap=CAP):
 
 def check_bounds(line_xy, traces, centre, widen=SHRINK):
     """Car rule bounds: per station min / max over our line and every pass of every driven trace (S25, our e115 gate
-    runs), the side facing the centreline widened by `widen` m (not past the centreline) -> stations, lo, hi."""
+    runs), the side facing the centreline (lo > 0 / hi < 0) widened by `widen` m toward it -> stations, lo, hi."""
     seg = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1)
     st, L = np.r_[0.0, np.cumsum(seg)[:-1]], seg.sum()
     s, d = station(line_xy, centre)
     o = np.argsort(s)
     rows = np.vstack([np.interp(st, s[o], d[o], period=L)] + [passes(x, centre, st) for x in traces])
     lo, hi = np.fmin.reduce(rows, 0), np.fmax.reduce(rows, 0)
-    return st, lo - np.clip(lo, 0, widen), hi + np.clip(-hi, 0, widen)
+    return st, lo - widen * (lo > 0), hi + widen * (hi < 0)
 
 
 def outside(car_xy, st, lo, hi, centre):
