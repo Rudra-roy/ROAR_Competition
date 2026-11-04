@@ -13,7 +13,7 @@ Sectors: one per corner, from the plan's top-speed point before it to the one af
   decel      peak deceleration, -dv/dt over a 5-tick mean (m/s^2)
   vmin       minimum speed (km/h) @ its position
   alat       peak |v^2 kappa| on the car's own path (course rate * v, 5-tick mean) (m/s^2)
-  exit       start of the last full-throttle (>= 0.95) run of the sector, i.e. where the car commits to the exit
+  exit       first point after the min-speed point from which throttle stays >= 0.95 for EXIT_HOLD ticks (1 s)
   plan       our plan's minimum in the sector at this car's positions (HUD plan / run.csv v_ref column), km/h
   d_apex     the car's signed offset from the centreline at the min-speed point (m, + left)
 """
@@ -26,6 +26,7 @@ R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(R, "competition_code"), os.path.join(R, "tools")]
 DATA = os.path.join(R, "competition_code", "data")
 DT = 0.05
+EXIT_HOLD = 20  # ticks
 LAPS = (1, 2)  # 0-based: the flying laps 2 and 3
 # corner apex ranges in line_s of the current racing line (copy of corner_diag.CORNERS; that module runs on import)
 CORNERS = [(795, 937), (1281, 1329), (1619, 1697), (2545, 2695), (3719, 3835), (3935, 3993), (4093, 4113),
@@ -49,12 +50,13 @@ def corner_metrics(D, a, b):
     s, v, thr, brk = D["s"][m], D["v"][m], D["thr"][m], D["brk"][m]
     k = int(np.argmin(v))
     lift = np.flatnonzero((thr[:k + 1] < 0.5) | (brk[:k + 1] > 0))
-    ex = np.flatnonzero(thr[k:] < 0.95)  # exit = start of the full-throttle run that ends the sector
+    full = np.convolve(thr[k:] >= 0.95, np.ones(EXIT_HOLD), "full")[EXIT_HOLD - 1:]  # full-throttle ticks ahead
+    ex = np.flatnonzero(full >= min(EXIT_HOLD, len(thr) - k))  # exit = first point held at full throttle 1 s
     dec = -_mean5(np.gradient(v) / DT)
     plan = D["plan"][m]
     return dict(time=float(np.ptp(D["t"][m]) + DT), lift_s=float(s[lift[0]]) if len(lift) else np.nan,
                 decel_max=float(dec[2:-2].max()) if len(v) > 5 else np.nan, v_min=float(v[k]), v_min_s=float(s[k]),
-                a_lat_max=float(np.abs(D["a_lat"][m]).max()), exit_thr_s=float(s[min(k + ex[-1] + 1, len(s) - 1)]) if len(ex) else float(s[k]),
+                a_lat_max=float(np.abs(D["a_lat"][m]).max()), exit_thr_s=float(s[k + ex[0]]) if len(ex) else np.nan,
                 plan_min=float(np.nanmin(plan)) if np.isfinite(plan).any() else np.nan, k=int(np.flatnonzero(m)[k]))
 
 
