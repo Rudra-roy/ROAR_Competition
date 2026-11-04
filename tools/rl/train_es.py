@@ -131,7 +131,10 @@ def main():
     ap.add_argument("--sigma", type=float, default=0.1)
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
     a = ap.parse_args()
+    if a.view:
+        os.environ["ROAR_RL_VIEW"] = str(a.view)
     out = os.path.join(ROOT, "rl", a.name)
     os.makedirs(out, exist_ok=True)
     st_f = os.path.join(out, "state.npz")

@@ -19,6 +19,7 @@ import time
 import numpy as np
 
 SLOT, WT = int(sys.argv[1]), os.path.abspath(sys.argv[2])
+VIEW = os.environ.get("ROAR_RL_VIEW") == str(SLOT)  # this slot opens a window with a chase camera
 PORT = 2000 + 3 * SLOT
 PARENT = "/home/mt-labpc/Documents/roar_racing"
 sys.path[:0] = [os.path.join(WT, "competition_code")]
@@ -42,8 +43,8 @@ def start_server():
     env = dict(os.environ)
     env["PATH"] = ":".join(p for p in env["PATH"].split(":") if "/.venv/" not in p)
     out = open(os.path.join(WT, "logs", "rl_server_%d.log" % SLOT), "w")
-    subprocess.Popen([os.path.join(PARENT, "run_monza.sh"), "-RenderOffScreen", "-carla-rpc-port=%d" % PORT,
-                      "-carla-streaming-port=%d" % (PORT + 1)], stdout=out, stderr=out, env=env,
+    args = ([] if VIEW else ["-RenderOffScreen"]) + ["-carla-rpc-port=%d" % PORT, "-carla-streaming-port=%d" % (PORT + 1)]
+    subprocess.Popen([os.path.join(PARENT, "run_monza.sh")] + args, stdout=out, stderr=out, env=env,
                      start_new_session=True)
     import socket
     for _ in range(300):
@@ -72,6 +73,7 @@ class Env:
         self.vel = v.attach_velocimeter_sensor()
         self.rpy = v.attach_roll_pitch_yaw_sensor()
         self.col = v.attach_collision_sensor(np.zeros(3), np.zeros(3))
+        self.spectator = client.get_world().get_spectator() if VIEW else None
         self.ref = np.genfromtxt(REF_RUN, delimiter=",", names=True)
         self.track = load_track(os.path.join(WT, "competition_code", "data", "racing_line.npz"))
         L = self.track.length
@@ -89,6 +91,13 @@ class Env:
         p = np.array([x - e_y * np.sin(psi), y + e_y * np.cos(psi)])
         z = self.wz[int(np.argmin(np.linalg.norm(self.wz[:, :2] - p, axis=1))), 2] + 0.3
         return np.array([p[0], p[1], z]), np.array([0.0, 0.0, yaw]), v * np.array([np.cos(yaw + beta), np.sin(yaw + beta), 0.0])
+
+    def chase(self):
+        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame)."""
+        tf = self.vehicle._base_actor.get_transform()
+        yaw = np.radians(tf.rotation.yaw)
+        loc = carla.Location(tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5)
+        self.spectator.set_transform(carla.Transform(loc, carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
 
     async def episode(self, weights, s0, s1):
         w, veh = self.world, self.vehicle
@@ -131,6 +140,8 @@ class Env:
             if imp > 100.0:
                 return t, True, imp, (sol.progress._total - target_total - off0) / dist
             await sol.step()
+            if self.spectator is not None:
+                self.chase()
             await w.step()
             ticks += 1
             t = ticks * DT
