@@ -31,6 +31,8 @@ START_V = 0.5             # m/s: the race clock starts the first frame the car m
 TELEPORT_M = 30.0         # per-frame jump treated as a respawn (ignored by the unwrapped progress)
 BETA_FULL_DEG = 15.0      # sideslip gauge full scale
 MINIMAP_PX = 220
+LOG_COLS = ("t", "el", "pct", "lap", "v", "beta", "plan", "thr", "brk", "steer", "sliding", "below", "over",
+            "x", "y", "yaw")  # x, y, yaw: ROAR frame (m, m, rad)
 
 
 def carla_to_roar(x, y):
@@ -202,7 +204,8 @@ class Hud:
             over = v > plan + PLAN_TOL_KMH / 3.6
         s = dict(t=t, el=0.0 if self.t0 is None else t - self.t0, lap_t=0.0 if self.lap_t0 is None else t - self.lap_t0,
                  total=total, lap=lap, pct=pct, v=v, beta=beta, plan=plan, sliding=sliding, below=below, over=over,
-                 thr=float(ctl.throttle), brk=float(ctl.brake), steer=float(ctl.steer), pos=(x, y), idx=self.laps.idx)
+                 thr=float(ctl.throttle), brk=float(ctl.brake), steer=float(ctl.steer), pos=(x, y), idx=self.laps.idx,
+                 x=float(x), y=float(y), yaw=math.radians(-tf.rotation.yaw))  # ROAR frame: yaw = -CARLA yaw, rad
         self.cur = s
         return s
 
@@ -308,9 +311,8 @@ class Hud:
             os.makedirs(os.path.join(ROOT, "logs"), exist_ok=True)
             f = open(os.path.join(ROOT, "logs", "hud.csv"), "w", buffering=1, newline="")
             self.csv = csv.writer(f)
-            self.csv.writerow(["t", "el", "pct", "lap", "v", "beta", "plan", "thr", "brk", "steer", "sliding", "below", "over"])
-        self.csv.writerow([round(s[k], 3) if isinstance(s[k], float) else s[k] for k in
-                           ("t", "el", "pct", "lap", "v", "beta", "plan", "thr", "brk", "steer", "sliding", "below", "over")])
+            self.csv.writerow(LOG_COLS)
+        self.csv.writerow([round(s[k], 4) if isinstance(s[k], float) else s[k] for k in LOG_COLS])
 
 
 _orig = None

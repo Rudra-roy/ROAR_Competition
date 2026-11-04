@@ -195,3 +195,20 @@ def test_plan_mapping_and_below_flag():
     assert not s2["below"]
     s3 = _walk_racing_line(*make(), 1.5)
     assert s3["over"]
+
+
+def test_log_has_roar_xy_yaw(tmp_path, monkeypatch):
+    import csv as _csv
+
+    monkeypatch.setattr(hud, "ROOT", str(tmp_path))
+    h, a = make(log=True)
+    a.set(*CL[300] * [1, -1], yaw=30.0, vx=20.0)  # CARLA yaw 30 deg clockwise -> ROAR yaw -30 deg
+    h.frame(_surface())
+    h.csv = None
+    rows = list(_csv.DictReader(open(tmp_path / "logs" / "hud.csv")))
+    pygame.quit()
+    old = ["t", "el", "pct", "lap", "v", "beta", "plan", "thr", "brk", "steer", "sliding", "below", "over"]
+    assert list(rows[0])[:len(old)] == old and list(rows[0])[len(old):] == ["x", "y", "yaw"]
+    assert float(rows[0]["x"]) == pytest.approx(CL[300][0], abs=1e-3)
+    assert float(rows[0]["y"]) == pytest.approx(CL[300][1], abs=1e-3)
+    assert float(rows[0]["yaw"]) == pytest.approx(np.radians(-30.0), abs=1e-3)
