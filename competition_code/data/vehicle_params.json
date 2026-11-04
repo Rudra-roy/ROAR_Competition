@@ -81,7 +81,7 @@
       30.14
     ]
   ],
-  "speed_scale": 1.03,
+  "speed_scale": 1.0,
   "v_ref_min": 1.0,
   "brake_scale": 0.97,
   "sideslip_k": 0.004,
