@@ -341,9 +341,5 @@
       "rms": 0.296
     }
   },
-  "brake_ellipse_c": 1.3,
-  "pursuit": {
-    "la0": 12.0,
-    "la_k": 0.6
-  }
+  "brake_ellipse_c": 1.3
 }
