@@ -23,6 +23,9 @@ cleanup() {
 }
 trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 if port_open; then kill_server; fi  # a stale server from an earlier run on this slot
+for _ in $(seq 120); do  # a CARLA server needs ~3 GB of RAM: wait for it rather than get OOM-killed mid-race
+  [ "$(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo)" -ge 3000 ] && break; sleep 5
+done
 if port_open; then echo "$LABEL,,0,port_busy"; exit 2; fi
 PATH=$SRVPATH setsid "$PARENT/run_monza.sh" -RenderOffScreen -carla-rpc-port=$PORT -carla-streaming-port=$((PORT + 1)) > "$LOG.server.log" 2>&1 &
 SRV=$!
