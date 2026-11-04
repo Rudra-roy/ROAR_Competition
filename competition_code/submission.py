@@ -3,6 +3,7 @@
 step(): localize on the line (Progress) -> FrenetMPC (curvature, accel) -> steer / pedal maps.
 """
 
+import bisect
 import os
 from typing import List
 
@@ -136,6 +137,18 @@ class RoarCompetitionSolution:
         alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
         return 2.0 * np.sin(alpha) / max(float(np.hypot(*r)), 1e-3)
 
+    def _pursuit_delta(self, p, yaw, s_total, v, pp):
+        """Hybrid steering: pure pursuit on the (offset) line with a speed-scheduled lookahead (pp la_v/la_m, m/s ->
+        m, times la_sec[section]); the arc's curvature becomes a steer angle through the tyre model's steady state,
+        times gain_sec[section]."""
+        ls = self._line_s(s_total)
+        i = bisect.bisect_right(self.veh._starts, ls) - 1
+        la = float(np.interp(v, pp["la_v"], pp["la_m"])) * (pp["la_sec"][i] if pp.get("la_sec") else 1.0)
+        kappa = self._pursuit_kappa(p, yaw, s_total, max(la, 5.0))
+        ty = self.mpc.ty
+        delta = ty.steady(kappa, max(v, 1.0), self.mpc.alpha_max)[0] * (pp["gain_sec"][i] if pp.get("gain_sec") else 1.0)
+        return float(np.clip(delta, -ty.g(v), ty.g(v)))
+
     def _kappa_cmd_ref(self, s):
         """Curvature of the shifted reference: offset curve of the line plus the offset's own bending."""
         k = self._kappa_ref(s)
@@ -182,6 +195,9 @@ class RoarCompetitionSolution:
         if self.tyre:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
                                           self._v_ref_mpc, self.u_prev, self._a_lat, self._a_brk)  # kappa = delta
+            pp = self.veh.p.get("pursuit")
+            if pp and "la_m" in pp:  # hybrid: pure-pursuit steering, the tyre MPC keeps the pedals
+                kappa = self._pursuit_delta(p[:2], yaw, s_total, v, pp)
             self.u_prev = (kappa, a)
             steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))
         else:

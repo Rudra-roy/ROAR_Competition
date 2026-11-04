@@ -203,3 +203,29 @@ def test_start_blend_slides_reference_onto_the_line():
     assert abs(sol._ref(0.0, 2.0, 0.0)[0]) < 1e-9  # no error at the start
     assert abs(sol._ref(0.5 * START_BLEND_M, 2.0, 0.0)[0] - 1.0) < 1e-9  # half way: 1 m of error
     assert sol._ref(START_BLEND_M + 1, 2.0, 0.0)[0] == 2.0  # blended out
+
+
+def test_hybrid_pursuit_steering_in_tyre_mode():
+    sol, loc, rpy, vel, car = _sol()
+    if not sol.tyre:
+        import pytest
+        pytest.skip("tyre MPC not selected")
+    sol._off = None
+    n = len(sol.veh.p["a_lat_sections"])
+    sol.veh.p["pursuit"] = {"la_v": [25.0, 44.0, 83.0], "la_m": [19.0, 38.0, 74.0], "gain_sec": [1.0] * n}
+    tr = sol.track
+    i = 2000
+    psi = tr.psi[i]
+    left = np.array([-np.sin(psi), np.cos(psi)])
+    for k in range(3):  # settle the start blend / first-tick logic, 2 m left of the line
+        j = i + 2 * k
+        loc.val = np.r_[tr.xy[j] + 2.0 * left, 0.0]
+        rpy.val = np.array([0.0, 0.0, tr.psi[j]])
+        vel.val = 40.0 * np.r_[np.cos(tr.psi[j]), np.sin(tr.psi[j]), 0.0]
+        asyncio.run(sol.step())
+    sol._e_y0 = 0.0  # no start blend: the full 2 m error
+    asyncio.run(sol.step())
+    k_line = float(np.mean(tr.kappa[i:i + 40]))
+    d_line = sol.mpc.ty.steady(k_line, 40.0)[0]
+    assert sol.last["kappa_cmd"] < d_line  # left of the line: steers right of the line's own steer
+    assert np.isfinite(car.control["steer"]) and abs(car.control["steer"]) <= 1.0
