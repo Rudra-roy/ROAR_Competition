@@ -55,7 +55,9 @@ class FrenetMPC:
         self.a_min = -veh.a_brake * veh.brake_scale
         self.a_lat_margin = float(cfg.get("a_lat_margin", 1.0))
         self.kb = kb = float(cfg.get("beta_k", 0.0))
-        self.cb = cb = dt / cfg["beta_tau_s"] if kb else 0.0
+        if kb and not cfg.get("beta_tau_s", 0) > 0:
+            raise ValueError("mpc beta_k needs beta_tau_s > 0 (s), got %r" % cfg.get("beta_tau_s"))
+        self.cb = cb = min(dt / cfg["beta_tau_s"], 1.0) if kb else 0.0
         self.NX = NX = 6 if kb else 5
         mag_x = MAG_X[:NX]
         self.k_lin = 0.5 * c / dt  # 1/(2 tau): damping ~0.7 with the lag, for the first-call linearisation

@@ -42,8 +42,9 @@ DS = 2.0
 STRAIGHT_DELTA = 0.5  # m, max lateral move of the raced line on its straights
 STRAIGHT_KAPPA = 0.002  # 1/m, |kappa| (15 m smoothed) below which the raced line counts as straight
 WALL_OUTER = 3.5  # m |d_centre|: no move toward the near wall from here out (ramped over 0.5 m)
-WALL_IN = 3.95  # m |d_centre|: raced-line points beyond are pulled in to it (cap 4.0 incl. the Track resampling)
+WALL_IN = 3.95  # m |d_centre|: raced-line points beyond may move in by up to the excess, never out (cap 4.0 checked)
 ITERS = 4
+QP_EPS = 1e-7
 
 
 def edges_from_waypoints(path=WP):
@@ -92,10 +93,24 @@ def qp_offsets(c, nrm, lo, hi, iters=ITERS):
                 b[k * n:(k + 1) * n] += wgt * coef * c[j, k]
             blocks.append(sp.csr_matrix((np.concatenate(data), (np.tile(I, 3), np.concatenate(cols))), shape=(n, n)))
         A = sp.vstack(blocks).tocsc()
+        P, q = sp.triu(A.T @ A).tocsc(), A.T @ b
         s = osqp.OSQP()
-        s.setup(P=sp.triu(A.T @ A).tocsc(), q=A.T @ b, A=sp.identity(n, format="csc"), l=lo, u=hi, verbose=False,
-                eps_abs=1e-7, eps_rel=1e-7, max_iter=200000, polish=True)
-        a = np.clip(s.solve(raise_error=False).x, lo, hi)
+        s.setup(P=P, q=q, A=sp.identity(n, format="csc"), l=lo, u=hi, verbose=False,
+                eps_abs=QP_EPS, eps_rel=QP_EPS, max_iter=200000, polish=True)
+        r = s.solve(raise_error=False)
+        # OSQP 1.x can hold a converged iterate to max_iter (or "solved inaccurate") on its duality-gap test: the
+        # straights QP stops at 200k iterations with primal 8e-9 / dual 2e-8, one free-line iteration reports
+        # "solved inaccurate" at primal 3.9e-7 (tol 5e-7). Accept those only when the residuals meet OSQP's own
+        # primal/dual criteria (eps_abs + eps_rel * scale, A = I here); anything else raises.
+        P_full = (A.T @ A).tocsc()
+        tol_p = QP_EPS * (1 + np.abs(r.x).max())
+        tol_d = QP_EPS * (1 + max(np.abs(P_full @ r.x).max(), np.abs(q).max(), np.abs(r.y).max()))
+        near = (osqp.SolverStatus.OSQP_MAX_ITER_REACHED, osqp.SolverStatus.OSQP_SOLVED_INACCURATE)
+        stuck = r.info.status_val in near and r.info.prim_res <= tol_p and r.info.dual_res <= tol_d
+        if r.info.status_val != osqp.SolverStatus.OSQP_SOLVED and not stuck:
+            raise RuntimeError("line QP not solved: %s (primal %.1e / %.1e, dual %.1e / %.1e)"
+                               % (r.info.status, r.info.prim_res, tol_p, r.info.dual_res, tol_d))
+        a = np.clip(r.x, lo, hi)
     return c + a[:, None] * nrm, a
 
 
@@ -121,7 +136,8 @@ def straight_weight(old_xy, kthr=STRAIGHT_KAPPA):
 
 def smooth_straights(old_xy, centre, delta=STRAIGHT_DELTA):
     """Min-curvature QP with offsets a along the raced line's own normals: |a| <= delta * w (w = straight_weight),
-    no move toward the near wall beyond WALL_OUTER, points beyond WALL_IN pulled in to it. Removes the raced line's
+    no move toward the near wall beyond WALL_OUTER; a point beyond WALL_IN may move in by up to its excess (its bound
+    is [excess inward, 0]: the QP may leave it where it is; main() checks the 4.0 cap). Removes the raced line's
     curvature wiggle on the straights (the weave the MPC follows, Task 8e) and leaves its corners as raced."""
     w, tr, idx = straight_weight(old_xy)
     nrm = np.c_[-np.sin(tr.psi[idx]), np.cos(tr.psi[idx])]  # left normal, same sense as the centreline's
@@ -149,18 +165,21 @@ def remap_sections(old_xy, new_xy, sections):
 
 def main(out, remap_from=None, straights=None):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
-    for slack in (SLACK, 2 * SLACK, 4 * SLACK):  # tighten until the resampled line is within the cap
-        xy = build(slack) if straights is None else smooth_straights(straights, centre)
-        dmax = max(np.abs(offsets(xy, centre)[0]).max(), np.abs(offsets(Track(xy).xy, centre)[0]).max())
-        if dmax <= MAX_OFFSET:
-            break
-        if straights is not None:
-            raise RuntimeError("line exceeds the %.1f m cap: %.3f" % (MAX_OFFSET, dmax))
+    dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(), np.abs(offsets(Track(xy).xy, centre)[0]).max())
+    if straights is not None:  # no slack in this mode: the bounds come from the raced line
+        xy, mode = smooth_straights(straights, centre), "straights"
+        dmax = dmax_of(xy)
     else:
+        for slack in (SLACK, 2 * SLACK, 4 * SLACK):  # tighten until the resampled line is within the cap
+            xy, mode = build(slack), "slack %.2f" % slack
+            dmax = dmax_of(xy)
+            if dmax <= MAX_OFFSET:
+                break
+    if dmax > MAX_OFFSET:
         raise RuntimeError("line exceeds the %.1f m cap: %.3f" % (MAX_OFFSET, dmax))
     tr = Track(xy, ds=1.0)
-    print("min-curvature line: %d points, L %.1f m, max|d_centre| %.3f (slack %.2f), |k|max %.4f, int k^2 %.4f"
-          % (len(xy), tr.length, dmax, slack, np.abs(tr.kappa).max(), (tr.kappa ** 2).sum() * tr.ds))
+    print("min-curvature line: %d points, L %.1f m, max|d_centre| %.3f (%s), |k|max %.4f, int k^2 %.4f"
+          % (len(xy), tr.length, dmax, mode, np.abs(tr.kappa).max(), (tr.kappa ** 2).sum() * tr.ds))
     if remap_from:
         path = os.path.join(DATA, "vehicle_params.json")
         with open(path) as f:

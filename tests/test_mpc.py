@@ -348,3 +348,12 @@ def test_sideslip_state_model_rows():
                                atol=2e-4)
     np.testing.assert_allclose(xs[1:, 0], xs[:-1, 0] + DT * vk * (xs[:-1, 1] - xs[:-1, 5]), atol=2e-3)
     assert FrenetMPC(V, NO_BETA).NX == 5  # absent = off (the 8d model)
+
+
+def test_sideslip_option_needs_tau_and_clamps_rate():
+    import pytest
+    with pytest.raises(ValueError):
+        FrenetMPC(V, dict(NO_BETA, beta_k=0.007))
+    m = FrenetMPC(V, dict(NO_BETA, beta_k=0.007, beta_tau_s=0.01))  # tau < dt: the lag row must not overshoot
+    assert m.cb == 1.0
+    assert m.solve(0.3, 0.0, 50.0, 0.0, lambda s: 0.0, lambda s: 50.0, (0.0, 0.0))[2]
