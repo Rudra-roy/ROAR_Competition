@@ -17,7 +17,7 @@ cleanup() {
     kill -TERM -- "-$PG" 2>/dev/null && sleep 2
     kill -KILL -- "-$PG" 2>/dev/null
   fi
-  WINEPREFIX=~/tools/pfx/pfx ~/tools/GE-Proton9-27/files/bin/wineserver -k >/dev/null 2>&1
+  # the server belongs to eval.sh's process group (killed above); never wineserver -k: other slots share the prefix
 }
 trap cleanup EXIT
 trap 'exit 130' INT

@@ -12,14 +12,21 @@ CSV="$REPO/results.csv"
 [ -f "$CSV" ] || echo "git_sha,label,run,sim_time_s,collisions,status" > "$CSV"
 SHA=$(git -C "$REPO" rev-parse --short HEAD)
 export WINEPREFIX=~/tools/pfx/pfx
-killsrv() { ~/tools/GE-Proton9-27/files/bin/wineserver -k >/dev/null 2>&1; sleep 3; }
+SRV=""
+killsrv() {  # only THIS eval's server (its process group): other sim slots share the Wine prefix
+  if [ -n "$SRV" ]; then kill -TERM -- "-$SRV" 2>/dev/null; sleep 2; kill -KILL -- "-$SRV" 2>/dev/null; SRV=""; fi
+  sleep 1
+}
+trap killsrv EXIT
 port_open() { (exec 3<>/dev/tcp/127.0.0.1/2000) 2>/dev/null; }
 
 for i in $(seq 1 "$RUNS"); do
   killsrv
   T0=$(date +%s)
   LOG="$REPO/logs/${LABEL}_${i}"
-  "$PARENT/run_monza.sh" ${ROAR_SERVER_ARGS:-} > "$LOG.server.log" 2>&1 &
+  if port_open; then echo "$SHA,$LABEL,$i,,0,port_busy" >> "$CSV"; echo "run $i: port 2000 busy"; continue; fi
+  setsid "$PARENT/run_monza.sh" ${ROAR_SERVER_ARGS:-} > "$LOG.server.log" 2>&1 &
+  SRV=$!
   status=server_hang
   for _ in $(seq 300); do port_open && { status=up; break; }; sleep 1; done
   sim=""; coll=0
