@@ -94,7 +94,7 @@
     "r_dkappa": 200000.0,
     "r_da": 0.01,
     "ey_max": 1.0,
-    "a_lat_margin": 1.2,
+    "a_lat_margin": 1.0,
     "ellipse": 0.0,
     "jerk_max": 60.0,
     "a_tau_s": 0.225
