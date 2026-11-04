@@ -152,3 +152,37 @@ def test_pursuit_kappa_on_circle_and_straight():
     assert abs(k - kmean) < 0.01 + 0.5 * abs(kmean)  # on the line: roughly the line's own curvature ahead
     k_left = sol._pursuit_kappa(p + 2.0 * np.r_[-np.sin(yaw), np.cos(yaw)], yaw, s_total, 30.0)
     assert k_left < k  # car 2 m left of the line steers back right
+
+
+def test_tyre_model_option_measures_sideslip_and_yaw_rate():
+    import json
+    import os
+    import submission
+    data = os.path.join(os.path.dirname(submission.__file__), "data")
+    p = json.load(open(os.path.join(data, "vehicle_params.json")))
+    if "tyre" not in p:
+        import pytest
+        pytest.skip("no fitted tyre model in vehicle_params")
+    loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
+    sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
+    asyncio.run(sol.initialize())
+    sol.tyre = True
+    from tyre_mpc import TyreMPC
+    sol.mpc = TyreMPC(sol.veh, dict(sol.veh.p["mpc"], model="tyre"))
+    sol._off = None
+    tr = sol.track
+    i = 300
+    psi = tr.psi[i]
+    loc.val = np.r_[tr.xy[i], 0.0]
+    rpy.val = np.array([0.0, 0.0, psi + 0.02])
+    vel.val = 30.0 * np.r_[np.cos(psi), np.sin(psi), 0.0]  # moving along the line, nose 0.02 rad left of it
+    asyncio.run(sol.step())
+    assert abs(sol.last["beta"] + 0.02) < 1e-6  # course - yaw
+    assert sol.last["r"] == 0.0  # first tick: no previous yaw
+    j = i + 2
+    loc.val = np.r_[tr.xy[j], 0.0]
+    rpy.val = np.array([0.0, 0.0, psi + 0.02 + 0.01])
+    asyncio.run(sol.step())
+    assert abs(sol.last["r"] - 0.01 / sol.mpc.dt) < 1e-6
+    assert sol.last["ok"] == 1
+    assert np.isfinite(car.control["steer"]) and abs(car.control["steer"]) <= 1.0

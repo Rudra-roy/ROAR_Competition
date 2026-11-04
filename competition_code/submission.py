@@ -11,14 +11,19 @@ import roar_py_interface
 
 from mpc import FrenetMPC
 from track import TELEPORT_JUMP_M, Progress, load_track
+from tyre_mpc import TyreMPC
 from vehicle import Vehicle, load_profile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
 LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "yaw", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
-            "steer", "throttle", "brake", "ok", "d_ref")
+            "steer", "throttle", "brake", "ok", "d_ref", "beta", "r")
 START_S_TOL_M = 5.0
+
+
+def _wrap(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
 # The learned offset is fitted on flying laps; from the standing start the car is slower and drifts differently
 # (s45_1 lap 1: 0.73 m flying-lap offset sent the car 4.10 m off centre at line_s 218), so fade it in.
 OFFSET_FADE_M = (200.0, 1000.0)  # s_total over which the offset ramps 0 -> 1 after a (re)start
@@ -62,7 +67,10 @@ class RoarCompetitionSolution:
         self.track = tr = load_track(os.path.join(DATA, "racing_line.npz"))
         self.veh = veh = Vehicle.from_json(os.path.join(DATA, "vehicle_params.json"))
         self.progress = Progress(tr)
-        self.mpc = FrenetMPC(veh, veh.p["mpc"])
+        # "model": "tyre" = slip-aware MPC (tyre_mpc.py, needs vehicle_params["tyre"]); else the kinematic FrenetMPC
+        self.tyre = veh.p["mpc"].get("model") == "tyre"
+        self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else FrenetMPC(veh, veh.p["mpc"])
+        self._yaw_prev = None
         prof = os.path.join(DATA, "speed_profile.npz")
         self.v_ref = load_profile(prof, speed_scale=veh.p["speed_scale"])
         self.profile_start_s = float(np.load(prof)["start_s"])
@@ -122,12 +130,20 @@ class RoarCompetitionSolution:
     async def step(self) -> None:
         p = np.asarray(self.location_sensor.get_last_gym_observation(), dtype=float)
         yaw = float(self.rpy_sensor.get_last_gym_observation()[2])
-        v = float(np.linalg.norm(self.velocity_sensor.get_last_gym_observation()))
+        vel = np.asarray(self.velocity_sensor.get_last_gym_observation(), dtype=float)
+        v = float(np.linalg.norm(vel))
         # Same teleport test as Progress: a respawn restarts progress, so forget the MPC's state too.
-        if self._p_prev is not None and np.hypot(*(p[:2] - self._p_prev)) > TELEPORT_JUMP_M:
+        teleport = self._p_prev is not None and np.hypot(*(p[:2] - self._p_prev)) > TELEPORT_JUMP_M
+        if teleport:
             self.mpc.reset()
             self.u_prev = (0.0, 0.0)
+            self._yaw_prev = None
         self._p_prev = p[:2]
+        # Sideslip (course - nose, left +; the velocity is in the same right-handed frame as yaw) and yaw rate from
+        # consecutive yaws: the tyre MPC's measured states. 0 when stationary / on the first tick after a (re)start.
+        beta = float(_wrap(np.arctan2(vel[1], vel[0]) - yaw)) if v > 1.0 else 0.0
+        r = float(_wrap(yaw - self._yaw_prev)) / self.mpc.dt if self._yaw_prev is not None else 0.0
+        self._yaw_prev = yaw
         s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
         a_lat = self._a_lat(s_total)
         # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (tools/fit_sideslip.py),
@@ -135,7 +151,8 @@ class RoarCompetitionSolution:
         # asking for yaw = line heading + beta. A function of s and v only: feeding back the measured course
         # (velocity direction) made the car weave into the wall (Task 7, Task 8c course1).
         # Clipped to the grip limit: over speed at corner entry v^2*kappa would ask for a huge heading offset.
-        e_psi -= self.veh.p["sideslip_k"] * float(np.clip(v * v * self._kappa_cmd_ref(s_total), -a_lat, a_lat))
+        if not self.tyre:  # the tyre model carries beta itself
+            e_psi -= self.veh.p["sideslip_k"] * float(np.clip(v * v * self._kappa_cmd_ref(s_total), -a_lat, a_lat))
         e_y_mpc, e_psi = self._ref(s_total, e_y, e_psi)
         if self.tick == 0:
             L = self.track.length
@@ -144,13 +161,19 @@ class RoarCompetitionSolution:
                 print(f"WARNING: start_s {self.progress.start_s:.1f} is {d:+.1f} m from the profile's "
                       f"{self.profile_start_s:.1f}: v_ref is offset along the line")
 
-        kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, s_total, self._kappa_cmd_ref, self._v_ref_mpc,
-                                      self.u_prev, self._a_lat)
-        self.u_prev = (kappa, a)
-        pp = self.veh.p.get("pursuit")  # {"la0": m, "la_k": s}: pure-pursuit steering, MPC keeps the pedals
-        if pp:
-            kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
-        steer = self.veh.steer_for(kappa, v)
+        if self.tyre:
+            kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
+                                          self._v_ref_mpc, self.u_prev, self._a_lat)  # kappa = steer angle delta
+            self.u_prev = (kappa, a)
+            steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))
+        else:
+            kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, s_total, self._kappa_cmd_ref, self._v_ref_mpc,
+                                          self.u_prev, self._a_lat)
+            self.u_prev = (kappa, a)
+            pp = self.veh.p.get("pursuit")  # {"la0": m, "la_k": s}: pure-pursuit steering, MPC keeps the pedals
+            if pp:
+                kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
+            steer = self.veh.steer_for(kappa, v)
         throttle, brake = self.veh.pedals_for(a, v)
         control = {
             "throttle": throttle,
@@ -165,7 +188,7 @@ class RoarCompetitionSolution:
         self.last = dict(tick=self.tick, s_total=s_total, line_s=self._line_s(s_total), e_y=e_y, e_psi=e_psi,
                          yaw=yaw, v=v, v_ref=self.v_ref(s_total), kappa_ref=self._kappa_ref(s_total), kappa_cmd=kappa,
                          a_cmd=a, steer=steer, throttle=throttle, brake=brake, ok=int(ok),
-                         d_ref=0.0 if self._off is None else self._off_at(s_total, 0))
+                         d_ref=0.0 if self._off is None else self._off_at(s_total, 0), beta=beta, r=r)
         if self._log:
             self._log.write(",".join(f"{self.last[c]:.6g}" for c in LOG_COLS) + "\n")
         self.tick += 1
