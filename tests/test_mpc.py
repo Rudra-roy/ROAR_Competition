@@ -292,3 +292,24 @@ def test_fallback_uses_unscaled_a_lat():
     assert ok is False
     assert 20.0 / v ** 2 < V.K(v)  # the a_lat bound binds, not steering
     assert abs(abs(k) - 20.0 / v ** 2) < 1e-9
+
+
+# ---- Task 8e: high-speed weave (plant fitted from the 8d gate logs by tools/fit_steer.py) ----
+K_RACE, TAU_RACE = 0.28, 0.40  # measured yaw-curvature gain per unit steer (flat 45-72 m/s) and lag on straights
+
+
+def test_no_weave_with_race_fitted_steering():
+    """65 m/s, 0.5 m off the line, plant = the race-fitted steering (gain K_RACE, lag TAU_RACE) while the MPC
+    predicts with V.K(v) and steer_tau_s: the first overshoot must die out (8d model: ~0.15 m weave after 2 s)."""
+    v = 65.0
+    g = K_RACE / V.K(v)
+    m = FrenetMPC(V, CFG)
+    x, u, ey = np.array([0.5, 0, v, 0, 0.0]), (0.0, 0.0), []
+    for _ in range(100):
+        k, a, ok = m.solve(x[0], x[1], x[2], 0.0, lambda s: 0.0, lambda s: v, u)
+        assert ok
+        x = np.array([x[0] + DT * v * x[1], x[1] + DT * v * x[4], v, 0.0, x[4] + DT / TAU_RACE * (g * u[0] - x[4])])
+        u = (k, a)
+        ey.append(x[0])
+    ey = np.abs(ey)
+    assert ey[40:80].max() < 0.05, ey[40:80].max()
