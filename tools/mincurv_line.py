@@ -45,6 +45,7 @@ DATA = os.path.join(ROOT, "competition_code", "data")
 HALF_W = 1.0817  # Tesla Model 3 bbox half-width (sim)
 YAW_ALLOW = 0.3  # body corner reach at ~0.1 rad heading + tracking slop
 MAX_OFFSET = 4.0  # same wall cap as the export_line line
+ENV_SHRINK = 0.3  # m, envelope pulled in where S25 is the extreme (--shrink)
 SLACK = 0.05  # QP bound below the cap: smoothed vs polyline centreline + the runtime Track resampling
 DS = 2.0
 STRAIGHT_DELTA = 0.5  # m, max lateral move of the raced line on its straights
@@ -233,7 +234,7 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
     wins = [wi for wi, fi in zip(WINDOWS, factors) if fi > 0]  # a 0-factor corner is not touched at all
     fac = np.array([fi for fi in factors if fi > 0], float)
     w, kw = window_weight(ls, tr.length, wins)
-    st, lo, hi, _, _ = envelope(old_xy, s25_xy, centre)
+    st, lo, hi, _, _ = envelope(old_xy, s25_xy, centre, shrink=ENV_SHRINK, cap=MAX_OFFSET)
     Lc = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
     sc, dc = station(base, centre)
     # allowed change of the centreline offset (|d| <= MAX_OFFSET - SLACK, never forcing the old line to move); a move
@@ -309,6 +310,10 @@ if __name__ == "__main__":
     ap.add_argument("--straights", metavar="OLD_LINE.npz")
     ap.add_argument("--widen", metavar="OLD_LINE.npz")
     ap.add_argument("--factors", default="1,1,1,1")
+    ap.add_argument("--max-offset", type=float, default=MAX_OFFSET,
+                    help="centreline cap (user lifted the 4.0 m cap 2026-11-04; the proven envelope still bounds it)")
+    ap.add_argument("--shrink", type=float, default=ENV_SHRINK)
     a = ap.parse_args()
+    MAX_OFFSET, ENV_SHRINK = a.max_offset, a.shrink
     main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], a.widen and np.load(a.widen)["xy"],
          [float(x) for x in a.factors.split(",")])
