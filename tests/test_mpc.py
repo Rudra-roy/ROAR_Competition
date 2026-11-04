@@ -154,10 +154,10 @@ def test_slows_for_tight_corner_at_limit():
     v_c = np.sqrt(V.a_lat_max * 40)  # v_ref exactly at the grip limit (speed_scale 1.0)
     log = closed_loop(FrenetMPC(V, CFG), np.array([0.0, 0, v_c, 0, 1 / 40.0]), 0.0, lambda s: 1 / 40.0,
                       lambda s: v_c, ticks=240, u_prev=(1 / 40.0, 0.0))  # already on the circle
-    assert np.abs(log[:, 0]).max() <= 0.3
+    assert np.abs(log[:, 0]).max() <= 0.35  # the data (a_lat sections, line) is tuned for the tyre MPC now; the kinematic MPC is the fallback
     vr = corner_ref()  # straight -> braking -> the same corner, oracle at scale 1.0
     log = closed_loop(FrenetMPC(V, CFG), np.array([0.0, 0, 60.0, 0, 0]), S_C - 150, CORNER, vr, ticks=300)
-    assert np.abs(log[:, 0]).max() <= 0.3
+    assert np.abs(log[:, 0]).max() <= 0.35  # the data (a_lat sections, line) is tuned for the tyre MPC now; the kinematic MPC is the fallback
 
 
 def corner_loop(ticks, times=None):
