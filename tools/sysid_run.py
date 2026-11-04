@@ -18,7 +18,7 @@ _orig = carla.Client.set_timeout  # Wine ticks are slow (same patch as demo.py)
 carla.Client.set_timeout = lambda self, t: _orig(self, max(t, 120.0))
 
 import competition_runner  # noqa: E402
-from track import Progress, Track  # noqa: E402
+from track import Progress, load_track  # noqa: E402
 
 DT = 0.05
 LOOKAHEAD_KMH = [(90, 18.0), (110, 22.0), (130, 28.0), (160, 36.0), (180, 44.0), (200, 52.0),
@@ -53,7 +53,7 @@ class SysIdSolution:
     async def initialize(self):
         os.makedirs(LOGS, exist_ok=True)
         np.save(os.path.join(LOGS, "maneuverable_waypoints.npy"), np.array([w.location for w in self.wps]))
-        self.track = tr = Track(np.load(os.path.join(REPO, "competition_code", "data", "racing_line.npz"))["xy"])
+        self.track = tr = load_track(os.path.join(REPO, "competition_code", "data", "racing_line.npz"))
         self.progress = Progress(tr)
         vl = np.minimum(V_CAP, np.sqrt(A_LAT / np.maximum(np.abs(tr.kappa), 1e-9)))
         m = len(vl)

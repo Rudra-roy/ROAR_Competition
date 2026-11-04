@@ -14,13 +14,28 @@ def _wrap(a):
     return np.pi - (np.pi - a) % (2 * np.pi)  # (-pi, pi]
 
 
+def fit_spline(xy, sigma: float = SMOOTH_SIGMA):
+    """Closed smoothing spline through the line points -> tck (u = normalised chord length, 0..1)."""
+    xy = np.asarray(xy, dtype=float)[:, :2]
+    pts = np.vstack([xy, xy[:1]])
+    spacing = np.linalg.norm(np.diff(pts, axis=0), axis=1).mean()  # close the loop for splprep(per=1)
+    return splprep([pts[:, 0], pts[:, 1]], s=len(xy) * (sigma * spacing / 0.94) ** 2, per=1)[0]
+
+
+def load_track(path: str, **kw) -> "Track":
+    """Track from a racing-line npz: xy, plus an optional closed spline tck_t / tck_c (cubic) that replaces the
+    points' own smoothing fit (a line edited locally keeps the rest of the old fit exactly, Task 8h)."""
+    d = np.load(path)
+    tck = (d["tck_t"], list(d["tck_c"]), 3) if "tck_t" in d else None
+    return Track(d["xy"], tck=tck, **kw)
+
+
 class Track:
-    def __init__(self, xy: np.ndarray, ds: float = 1.0, sigma: float = SMOOTH_SIGMA):
+    def __init__(self, xy: np.ndarray, ds: float = 1.0, sigma: float = SMOOTH_SIGMA, tck=None):
         xy = np.asarray(xy, dtype=float)[:, :2]
         n = len(xy)
-        pts = np.vstack([xy, xy[:1]])
-        spacing = np.linalg.norm(np.diff(pts, axis=0), axis=1).mean()  # close the loop for splprep(per=1)
-        tck, _ = splprep([pts[:, 0], pts[:, 1]], s=n * (sigma * spacing / 0.94) ** 2, per=1)
+        if tck is None:
+            tck = fit_spline(xy, sigma)
         u = np.linspace(0, 1, 20 * n + 1)
         x, y = splev(u, tck)
         seg = np.hypot(np.diff(x), np.diff(y))

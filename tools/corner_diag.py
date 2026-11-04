@@ -13,9 +13,9 @@ import sys, collections, numpy as np
 import os
 R=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0,R+'/competition_code')
-from track import Track
+from track import load_track
 from vehicle import Vehicle
-tr=Track(np.load(R+'/competition_code/data/racing_line.npz')['xy']); L=tr.length
+tr=load_track(R+'/competition_code/data/racing_line.npz'); L=tr.length
 veh=Vehicle.from_json(R+'/competition_code/data/vehicle_params.json')
 DT=0.05
 FF_K_LOGGED=0.004  # sideslip_k of every Task 8/8b run (legacy logs without a yaw column)

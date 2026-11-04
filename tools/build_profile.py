@@ -112,10 +112,10 @@ def slowest_corners(s, v, length, n=5, sep=100.0):
 def main():
     sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tests")]
     from profile_oracle import oracle_profile
-    from track import Track
+    from track import load_track
     from vehicle import Vehicle
 
-    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    tr = load_track(os.path.join(DATA, "racing_line.npz"))
     veh = Vehicle.from_json(os.path.join(DATA, "vehicle_params.json"))
     L = tr.length
     start_s = tr.project(np.load(os.path.join(DATA, "centreline.npy"))[0])[1]

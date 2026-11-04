@@ -187,8 +187,8 @@ def fit(log):
 
 def a_lat_sections(wp_xyz):
     sys.path.insert(0, os.path.join(REPO, "competition_code"))
-    from track import Track
-    tr = Track(np.load(os.path.join(REPO, "competition_code", "data", "racing_line.npz"))["xy"])
+    from track import load_track
+    tr = load_track(os.path.join(REPO, "competition_code", "data", "racing_line.npz"))
     secs = [[tr.project(wp_xyz[i])[1], mu * 9.81] for i, mu in zip(SECTION_WP, SECTION_MU)]
     return sorted([[round(float(s), 1), round(a, 3)] for s, a in secs])
 

@@ -42,8 +42,8 @@ def predicted(p):
     s, v = d["s"], p["speed_scale"] * d["v"]
     dt = 2 * np.diff(s) / (v[:-1] + v[1:])
     sys.path.insert(0, os.path.join(ROOT, "competition_code"))
-    from track import Track
-    L = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"]).length
+    from track import load_track
+    L = load_track(os.path.join(DATA, "racing_line.npz")).length
     idx = sec_index(sections(p), (d["start_s"] + 0.5 * (s[:-1] + s[1:])) % L)
     return dt.sum(), np.bincount(idx, dt, minlength=len(p["a_lat_sections"]))
 
@@ -56,8 +56,8 @@ def summarise(run_csv, p):
     # car offset from the centreline (walls ~4.15-4.7 m for the car centre; the line itself is within 4.0)
     sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tools")]
     from export_line import offsets
-    from track import Track
-    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    from track import load_track
+    tr = load_track(os.path.join(DATA, "racing_line.npz"))
     ls = d["line_s"][::2]
     psi = np.interp(ls, tr.s, np.unwrap(tr.psi), period=tr.length)
     xy = np.c_[np.interp(ls, tr.s, tr.xy[:, 0], period=tr.length), np.interp(ls, tr.s, tr.xy[:, 1], period=tr.length)]

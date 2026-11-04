@@ -106,3 +106,21 @@ def test_relocalize_after_teleport(real):
     assert pg.start_s == pytest.approx(tr.s[start], abs=1.0)
     s2 = pg.update(tr.xy[start + 1], tr.psi[start + 1])[0]
     assert 0 < s2 < 3
+
+
+def test_given_spline_is_bit_identical_and_npz_loader(real, tmp_path):
+    """Track(xy, tck=its own fit) == Track(xy); load_track reads xy (+ optional tck_t / tck_c) from an npz."""
+    from track import fit_spline, load_track
+    xy, tr = real
+    t, c, k = fit_spline(xy)
+    tr2 = Track(xy, tck=(t, c, k))
+    for a in ("s", "xy", "psi", "kappa"):
+        assert np.array_equal(getattr(tr, a), getattr(tr2, a))
+    p = tmp_path / "plain.npz"
+    np.savez(p, xy=xy)
+    assert np.array_equal(load_track(str(p)).kappa, tr.kappa)
+    q = tmp_path / "spl.npz"
+    np.savez(q, xy=xy[::2], tck_t=t, tck_c=np.array(c))  # the spline wins over the points' own fit
+    tr3 = load_track(str(q))
+    assert abs(tr3.length - tr.length) < 0.01  # same curve (the points only set the arc-length sampling density)
+    assert max(abs(tr.project(p)[2]) for p in tr3.xy[::50]) < 1e-3

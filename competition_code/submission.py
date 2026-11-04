@@ -10,7 +10,7 @@ import numpy as np
 import roar_py_interface
 
 from mpc import FrenetMPC
-from track import TELEPORT_JUMP_M, Progress, Track
+from track import TELEPORT_JUMP_M, Progress, load_track
 from vehicle import Vehicle, load_profile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +43,7 @@ class RoarCompetitionSolution:
         self.collision_sensor = collision_sensor
 
     async def initialize(self) -> None:
-        self.track = tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+        self.track = tr = load_track(os.path.join(DATA, "racing_line.npz"))
         self.veh = veh = Vehicle.from_json(os.path.join(DATA, "vehicle_params.json"))
         self.progress = Progress(tr)
         self.mpc = FrenetMPC(veh, veh.p["mpc"])

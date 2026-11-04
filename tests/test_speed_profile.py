@@ -6,7 +6,7 @@ import pytest
 
 from build_profile import build_profile, lap_times
 from profile_oracle import oracle_profile
-from track import Track
+from track import load_track
 from vehicle import Vehicle
 
 D = os.path.join(os.path.dirname(__file__), "..", "competition_code", "data")
@@ -63,7 +63,7 @@ def test_circle_lat_limit():
 
 @pytest.fixture(scope="module")
 def real():
-    tr = Track(np.load(os.path.join(D, "racing_line.npz"))["xy"])
+    tr = load_track(os.path.join(D, "racing_line.npz"))
     start = tr.project(np.load(os.path.join(D, "centreline.npy"))[0])[1]
     s, v = build_profile(tr, BOX, start)
     return tr, start, s, v

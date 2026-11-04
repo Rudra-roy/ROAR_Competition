@@ -17,7 +17,7 @@ import numpy as np
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(R, "competition_code"), os.path.join(R, "tools")]
 from export_line import offsets  # noqa: E402
-from track import Track  # noqa: E402
+from track import Track, load_track  # noqa: E402
 
 DATA = os.path.join(R, "competition_code", "data")
 CHICANE_WALL = np.array([[267.2, 906.9], [274.5, 907.6]])  # mc8d impact xy span (8d line_s 864-871)
@@ -34,7 +34,7 @@ def seg_dist(p, ab):
 
 def margins(run_csv, line_xy, centre, wall=CHICANE_WALL, corners=CORNERS):
     d = np.genfromtxt(run_csv, delimiter=",", names=True)
-    tr = Track(line_xy)
+    tr = line_xy if isinstance(line_xy, Track) else Track(line_xy)  # a Track keeps an npz's own spline
     ls = d["line_s"]
     I = lambda a: np.interp(ls, tr.s, a, period=tr.length)  # noqa: E731
     psi = I(np.unwrap(tr.psi))
@@ -56,7 +56,7 @@ if __name__ == "__main__":
             line = a[7:]
         else:
             files.append(a)
-    lxy, centre = np.load(line)["xy"], np.load(os.path.join(DATA, "centreline.npy"))
+    lxy, centre = load_track(line), np.load(os.path.join(DATA, "centreline.npy"))
     print("| run | chicane right | lap max\\|d\\| @ line_s | " + " | ".join("c%d" % b for _, b in CORNERS) + " |")
     print("|" + "---|" * (3 + len(CORNERS)))
     for f in files:

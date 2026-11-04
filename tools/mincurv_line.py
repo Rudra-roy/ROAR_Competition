@@ -1,6 +1,7 @@
 """Minimum-curvature racing line -> competition_code/data/racing_line.npz.
 
-  python tools/mincurv_line.py competition_code/data/racing_line.npz [--straights OLD.npz] [--remap-from OLD.npz]
+  python tools/mincurv_line.py competition_code/data/racing_line.npz [--straights OLD.npz | --widen OLD.npz
+                                [--factors 1,1,1,1]] [--remap-from OLD.npz]
 
 Free mode (default) is the full min-curvature line in the waypoint corridor. Raced in Task 8e (mc8d): the lane
 polygon is not the physical corridor (hits at |d_centre| 2.8 and 4.0 in the first km), so it does not ship.
@@ -14,6 +15,13 @@ closed loop. Corridor = the runner's road polygon (waypoints +- lane_width/2, as
 minus the car half-width + YAW_ALLOW, intersected with |a| <= MAX_OFFSET - SLACK (the cap is checked against the
 centreline polyline, which the smoothed centreline differs from by a few cm).
 The waypoints file is read with np.load only (data). The old line stays reproducible with tools/export_line.py.
+--widen OLD.npz (Task 8h): the same QP along the old line's normals, free only in the corner WINDOWS (braking point
+-> corner exit, line_s of OLD, cosine-blended to 0 over BLEND m each side), bounds = the proven envelope
+(tools/envelope.py: our line + the S25 car's driven offsets, S25 side shrunk 0.3 m, |d| <= 4). --factors scales each
+window's shift (0 = that corner as before, 0.5 = half way). Track's smoothing spline is global (refitting moves
+every corner's kappa by up to ~80 %), so the output npz carries its own spline (tck_t / tck_c, read by
+track.load_track): the old fit with only the coefficients whose support lies inside a window refitted to the new
+points; outside the windows the line the car follows is the old one exactly.
 --remap-from: a_lat_sections in vehicle_params.json are keyed by line_s of the OLD line; each start is converted to
 xy on the old line and projected onto the new one (values kept, list re-sorted).
 """
@@ -29,7 +37,7 @@ import transforms3d as tr3d
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tools")]
 from export_line import offsets  # noqa: E402
-from track import Track  # noqa: E402
+from track import Track, fit_spline  # noqa: E402
 from scipy.ndimage import gaussian_filter1d  # noqa: E402
 
 WP = os.path.join(os.path.dirname(ROOT), "ROAR_PY", "roar_py_carla", "roar_py_carla", "assets", "waypoints", "Monza.npz")
@@ -44,6 +52,13 @@ STRAIGHT_KAPPA = 0.002  # 1/m, |kappa| (15 m smoothed) below which the raced lin
 WALL_OUTER = 3.5  # m |d_centre|: no move toward the near wall from here out (ramped over 0.5 m)
 WALL_IN = 3.95  # m |d_centre|: raced-line points beyond may move in by up to the excess, never out (cap 4.0 checked)
 ITERS = 4
+# corner windows, line_s of the 8e/e115 line (racing_line.npz at 8d1f3a4): braking point (plan's top speed) -> exit
+# (|kappa| back to straight); names = corner_compare sectors c937 chicane, c1697, c3835, c5413 hairpin
+WINDOWS = [(780.0, 1060.0), (1600.0, 1780.0), (3720.0, 3860.0), (5240.0, 5500.0)]
+SHIP_FACTORS = (1.0, 0.0, 1.0, 1.0)  # c1697 off: S25 runs only ~0.3 m wider at its apex, so the envelope pins it there
+BLEND = 60.0  # m, cosine ramp of the free band each side of a window
+KNOT_DS = 6.0  # m, spline knot spacing inside the windows (the old fit has ~20-45 m knots there)
+MARGIN = 40.0  # m beyond the blend: spline patch with the old curve as target (room to meet its coefficients)
 QP_EPS = 1e-7
 
 
@@ -149,6 +164,85 @@ def smooth_straights(old_xy, centre, delta=STRAIGHT_DELTA):
     return qp_offsets(old_xy, nrm, lo, hi)[0]
 
 
+def window_weight(ls, L, windows=WINDOWS, blend=BLEND):
+    """Per line_s: 1 inside a window, cosine ramp to 0 over `blend` m each side, 0 elsewhere; and the window index
+    (-1 outside)."""
+    w, k = np.zeros(len(ls)), np.full(len(ls), -1)
+    for j, (a, b) in enumerate(windows):
+        da = (ls - a + L / 2) % L - L / 2  # signed distance past a (closed loop)
+        db = (ls - b + L / 2) % L - L / 2
+        r = np.where(da < 0, -da, np.where(db > 0, db, 0.0))  # distance outside [a, b]
+        wj = np.where(r < blend, 0.5 * (1 + np.cos(np.pi * r / blend)), 0.0)
+        k = np.where(wj > 0, j, k)
+        w = np.maximum(w, wj)
+    return w, k
+
+
+def chord_u(xy):
+    """splprep's parameter of each point of a closed line: normalised cumulative chord length (0 at xy[0])."""
+    pts = np.vstack([xy, xy[:1]])
+    u = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+    return (u / u[-1])[:-1], u[-1]
+
+
+def patch_spline(tck, u, target, free, knot_ds_u):
+    """Spline tck with knots added every knot_ds_u inside each run of `free` points (exact knot insertion: the curve
+    is unchanged) and the coefficients whose support covers free points only refitted (least squares) to the targets
+    at parameters u. Every other coefficient stays as it was, so outside the runs the curve is exactly the old one."""
+    from scipy.interpolate import BSpline, insert
+    k = tck[2]
+    edges = np.flatnonzero(np.diff(np.r_[0, free.astype(int), 0]))  # runs [edges[2i], edges[2i+1])
+    for a, b in zip(edges[::2], edges[1::2]):
+        for x in np.arange(u[a] + knot_ds_u, u[b - 1] - knot_ds_u / 2, knot_ds_u):
+            if np.abs(tck[0] - x).min() > knot_ds_u / 4:
+                tck = insert(x, tck, 1, per=1)
+    t = tck[0]
+    c = [np.array(ci[:len(t) - k - 1], float) for ci in tck[1]]
+    nb = len(c[0])
+    fj = [j for j in range(nb - k) if t[j] >= 0 and t[j + k + 1] <= 1  # not the periodic wrap-around copies
+          and free[(u >= t[j]) & (u <= t[j + k + 1])].all()]
+    if fj:
+        rows = np.flatnonzero(np.any([(u >= t[j]) & (u <= t[j + k + 1]) for j in fj], axis=0))
+        B = BSpline.design_matrix(u[rows], t, k).toarray()
+        fixed = np.setdiff1d(np.arange(nb), fj)
+        for d in (0, 1):
+            c[d][fj] = np.linalg.lstsq(B[:, fj], target[rows, d] - B[:, fixed] @ c[d][fixed], rcond=None)[0]
+    return t, c, k
+
+
+def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0)):
+    """-> (points, tck). The QP runs on the old line as the car follows it (its own smoothing spline sampled at each
+    point's parameter, not the noisy points): min-curvature offsets along its normals, free only in the WINDOWS
+    (cosine blended), within the proven envelope; window j's shift scaled by factors[j]. The spline is the old fit
+    with dense knots and refitted coefficients over window +- (BLEND + MARGIN); the target in the margin is the old
+    curve itself, so the patch meets the untouched coefficients smoothly and the curve outside window +- (BLEND +
+    MARGIN) is the old one exactly. points (for tools that read xy) = the new curve's samples inside the patch, the
+    old points elsewhere."""
+    from scipy.interpolate import splev
+    from envelope import envelope, station
+    tck = fit_spline(old_xy)
+    u, chord = chord_u(old_xy)
+    base = np.array(splev(u, tck)).T
+    dx, dy = splev(u, tck, der=1)
+    nrm = np.c_[-dy, dx] / np.hypot(dx, dy)[:, None]  # left normal
+    tr = Track(old_xy, tck=tck)
+    ls = np.array([tr.project(p)[1] for p in base])
+    w, kw = window_weight(ls, tr.length)
+    st, lo, hi, _, _ = envelope(old_xy, s25_xy, centre)
+    Lc = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
+    sc, dc = station(base, centre)
+    # allowed change of the centreline offset (|d| <= MAX_OFFSET - SLACK, never forcing the old line to move); a move
+    # a along the line normal changes it by a*cos(heading gap) <= a
+    cap = MAX_OFFSET - SLACK
+    lo_p = np.minimum(np.maximum(np.interp(sc, st, lo, period=Lc), -cap) - dc, 0)
+    hi_p = np.maximum(np.minimum(np.interp(sc, st, hi, period=Lc), cap) - dc, 0)
+    new = qp_offsets(base, nrm, w * lo_p, w * hi_p)[0]
+    f = np.where(kw >= 0, np.asarray(factors, float)[kw], 0.0)
+    new = base + f[:, None] * (new - base)
+    patch = window_weight(ls, tr.length, blend=BLEND + MARGIN)[0] > 0
+    return np.where(patch[:, None], new, old_xy), patch_spline(tck, u, new, patch, KNOT_DS / chord)
+
+
 def remap_s(old_tr, new_tr, s):
     p = [np.interp(s % old_tr.length, old_tr.s, old_tr.xy[:, k], period=old_tr.length) for k in (0, 1)]
     return new_tr.project(np.array(p))[1]
@@ -156,17 +250,25 @@ def remap_s(old_tr, new_tr, s):
 
 def remap_sections(old_xy, new_xy, sections):
     """[[old line_s start, value], ...] -> [[new line_s start, value], ...] sorted by the new start."""
-    to, tn = Track(old_xy), Track(new_xy)
+    to = old_xy if isinstance(old_xy, Track) else Track(old_xy)
+    tn = new_xy if isinstance(new_xy, Track) else Track(new_xy)
     rows = sorted((round(float(remap_s(to, tn, s)), 1), s, a) for s, a in sections)
     for s1, s0, a in rows:
         print("  section %7.1f -> %7.1f  a_lat %.3f" % (s0, s1, a))
     return [[s1, a] for s1, _, a in rows]
 
 
-def main(out, remap_from=None, straights=None):
+def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.0, 1.0)):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
-    dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(), np.abs(offsets(Track(xy).xy, centre)[0]).max())
-    if straights is not None:  # no slack in this mode: the bounds come from the raced line
+    tck = None
+    dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(),  # noqa: E731
+                             np.abs(offsets(Track(xy, tck=tck).xy, centre)[0]).max())
+    if widen is not None:
+        from envelope import S25_HUD, load_xy
+        xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors)
+        mode = "widen %s" % ",".join("%g" % f for f in factors)
+        dmax = dmax_of(xy)
+    elif straights is not None:  # no slack in this mode: the bounds come from the raced line
         xy, mode = smooth_straights(straights, centre), "straights"
         dmax = dmax_of(xy)
     else:
@@ -177,17 +279,21 @@ def main(out, remap_from=None, straights=None):
                 break
     if dmax > MAX_OFFSET:
         raise RuntimeError("line exceeds the %.1f m cap: %.3f" % (MAX_OFFSET, dmax))
-    tr = Track(xy, ds=1.0)
+    tr = Track(xy, ds=1.0, tck=tck)
     print("min-curvature line: %d points, L %.1f m, max|d_centre| %.3f (%s), |k|max %.4f, int k^2 %.4f"
           % (len(xy), tr.length, dmax, mode, np.abs(tr.kappa).max(), (tr.kappa ** 2).sum() * tr.ds))
     if remap_from:
         path = os.path.join(DATA, "vehicle_params.json")
         with open(path) as f:
             p = json.load(f)
-        p["a_lat_sections"] = remap_sections(np.load(remap_from)["xy"], xy, p["a_lat_sections"])
+        from track import load_track
+        p["a_lat_sections"] = remap_sections(load_track(remap_from), tr, p["a_lat_sections"])
         with open(path, "w") as f:
             json.dump(p, f, indent=2)
-    np.savez(out, xy=xy)
+    if tck is None:
+        np.savez(out, xy=xy)
+    else:
+        np.savez(out, xy=xy, tck_t=tck[0], tck_c=np.array(tck[1]))
 
 
 if __name__ == "__main__":
@@ -196,5 +302,8 @@ if __name__ == "__main__":
     ap.add_argument("out")
     ap.add_argument("--remap-from")
     ap.add_argument("--straights", metavar="OLD_LINE.npz")
+    ap.add_argument("--widen", metavar="OLD_LINE.npz")
+    ap.add_argument("--factors", default="1,1,1,1")
     a = ap.parse_args()
-    main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"])
+    main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], a.widen and np.load(a.widen)["xy"],
+         [float(x) for x in a.factors.split(",")])

@@ -83,3 +83,77 @@ def test_remap_sections_follows_xy():
         p = to.xy[int(round(s0 / to.ds)) % len(to.s)]
         assert abs(tn.project(p)[1] - s1) < 1.0
     assert [r[0] for r in out] == sorted(r[0] for r in out)
+
+
+@pytest.fixture(scope="module")
+def widened(old_line, tmp_path_factory):
+    """(8e line, Track of the corner-widened line (its own spline), its points). The 8e line = straights mode on the
+    8d line (byte-identical to the shipped 8e/e115 racing_line.npz)."""
+    import envelope
+    if not (os.path.exists(envelope.S25_HUD) and os.path.exists(mincurv_line.WP)):
+        pytest.skip("S25 HUD log or waypoints not found")
+    from track import load_track
+    d = tmp_path_factory.mktemp("w")
+    mincurv_line.main(str(d / "e8.npz"), straights=old_line)
+    e8 = np.load(d / "e8.npz")["xy"]
+    mincurv_line.main(str(d / "w.npz"), widen=e8, factors=mincurv_line.SHIP_FACTORS)
+    return e8, load_track(str(d / "w.npz")), np.load(d / "w.npz")["xy"]
+
+
+def _on(tn, to, sel):
+    """New-line kappa and |offset| at the old line's samples sel (same geometric place, interpolated in s)."""
+    pr = [tn.project(p) for p in to.xy[sel]]
+    s = np.array([q[1] for q in pr])
+    return np.interp(s, tn.s, tn.kappa, period=tn.length), np.abs([q[2] for q in pr])
+
+
+def _active():
+    return [wi for wi, f in zip(mincurv_line.WINDOWS, mincurv_line.SHIP_FACTORS) if f > 0]
+
+
+def test_widen_pins_the_line_outside_the_windows(widened):
+    """Outside the windows (+ blend) the resampled line the car follows is the old one to 1 cm, and no corner's
+    kappa moves by more than 5 % (Track's global spline coupling, Task 8e: up to 80 % with a plain refit)."""
+    e8, tn, _ = widened
+    to = Track(e8)
+    out = mincurv_line.window_weight(to.s, to.length, windows=_active())[0] == 0
+    assert 0.5 < out.mean() < 0.95
+    k, d = _on(tn, to, out)
+    assert d.max() <= 0.01
+    k0 = to.kappa[out]
+    corner = np.abs(k0) >= 0.005  # R <= 200 m
+    assert corner.sum() > 500
+    assert np.all(np.abs(k - k0)[corner] <= 0.05 * np.abs(k0[corner]))
+    assert np.abs(k - k0)[~corner].max() <= 5e-4
+
+
+def test_widen_raises_min_radius_in_every_window(widened):
+    e8, tn, _ = widened
+    to = Track(e8)
+    s_new_on_old = np.array([to.project(p)[1] for p in tn.xy])
+    for a, b in _active():
+        r_old = 1 / np.abs(to.kappa[(to.s >= a) & (to.s <= b)]).max()
+        r_new = 1 / np.abs(tn.kappa[(s_new_on_old >= a) & (s_new_on_old <= b)]).max()
+        assert r_new > r_old + 1.0, (a, b, r_old, r_new)
+
+
+def test_widen_respects_the_envelope_and_cap(widened):
+    import envelope
+    e8, tn, xy = widened
+    c = np.load(CENTRE)
+    st, lo, hi, _, _ = envelope.envelope(e8, envelope.load_xy(envelope.S25_HUD), c)
+    L = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1).sum()
+    so, do = envelope.station(Track(e8).xy, c)  # the old line as the car follows it (its raw points carry +-6 cm noise)
+    o = np.argsort(so)
+    d_old = np.interp(st, so[o], do[o], period=L)
+    lo, hi = np.minimum(lo, d_old), np.maximum(hi, d_old)
+    s, d = envelope.station(tn.xy, c)
+    tol = 0.03  # linear interpolation between the 2 m stations in the tightest corners
+    assert np.all(d >= np.interp(s, st, lo, period=L) - tol) and np.all(d <= np.interp(s, st, hi, period=L) + tol)
+    assert np.abs(offsets(tn.xy, c)[0]).max() <= 4.0 and np.abs(offsets(xy, c)[0]).max() <= 4.0
+
+
+def test_widen_closed_and_no_kinks(widened):
+    _, tn, _ = widened
+    assert np.linalg.norm(tn.xy[0] - tn.xy[-1]) < 1.5 * tn.ds
+    assert np.abs(kink_metric(tn)).max() < KINK_THR

@@ -59,10 +59,10 @@ def fit(sets, lag, braking):
 
 def main():
     sys.path.insert(0, os.path.join(ROOT, "competition_code"))
-    from track import Track
+    from track import load_track
     from vehicle import Vehicle
     files = [a for a in sys.argv[1:] if not a.startswith("--")]
-    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    tr = load_track(os.path.join(DATA, "racing_line.npz"))
     veh = Vehicle.from_json(os.path.join(DATA, "vehicle_params.json"))
     sets = [samples(f, tr, veh) for f in files]
     print("%d runs" % len(sets))

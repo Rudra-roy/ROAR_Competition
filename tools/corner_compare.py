@@ -69,8 +69,8 @@ def load(path):
         xy, t, v, thr, brk = np.c_[d["x"], d["y"]], d["t"], d["v"], d["thr"], d["brk"]
         plan = d["plan"]
     else:  # our run.csv
-        from track import Track
-        tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+        from track import load_track
+        tr = load_track(os.path.join(DATA, "racing_line.npz"))
         I = lambda a: np.interp(d["line_s"], tr.s, a, period=tr.length)  # noqa: E731
         psi = I(np.unwrap(tr.psi))
         xy = np.c_[I(tr.xy[:, 0]), I(tr.xy[:, 1])] + d["e_y"][:, None] * np.c_[-np.sin(psi), np.cos(psi)]
@@ -86,8 +86,8 @@ def sectors():
     """[(name, a, b)] in centreline metres, a in [0, L), b > a, contiguous over one lap. Boundaries: the plan's
     (lap 2 of speed_profile.npz) top-speed point between consecutive corners, i.e. just before each braking zone."""
     from hud import Polyline
-    from track import Track
-    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    from track import load_track
+    tr = load_track(os.path.join(DATA, "racing_line.npz"))
     cl = Polyline(np.load(os.path.join(DATA, "centreline.npy")))
     pr = np.load(os.path.join(DATA, "speed_profile.npz"))
     lap2 = (pr["s"] >= tr.length) & (pr["s"] < 2 * tr.length)
@@ -139,8 +139,8 @@ def grip_table(logs, p=95.0):
     """a_lat sections of vehicle_params.json vs the p-th percentile |a_lat| each log reached in them."""
     import json
     from hud import Polyline
-    from track import Track
-    tr = Track(np.load(os.path.join(DATA, "racing_line.npz"))["xy"])
+    from track import load_track
+    tr = load_track(os.path.join(DATA, "racing_line.npz"))
     cl = Polyline(np.load(os.path.join(DATA, "centreline.npy")))
     secs = json.load(open(os.path.join(DATA, "vehicle_params.json")))["a_lat_sections"]
     st = [cl.project(tr.xy[int(round(a / tr.ds)) % len(tr.s)])[1] for a, _ in secs]

@@ -88,7 +88,7 @@ def fit_beta(runs, taus=TAUS):
 
 def main():
     sys.path.insert(0, os.path.join(ROOT, "competition_code"))
-    from track import Track
+    from track import load_track
     from vehicle import Vehicle
     args = sys.argv[1:]
     line = os.path.join(DATA, "racing_line.npz")
@@ -97,7 +97,7 @@ def main():
         args.remove("--line"), args.remove(line)
     with open(PARAMS) as f:
         p = json.load(f)
-    tr = Track(np.load(line)["xy"])
+    tr = load_track(line)
     runs = [load(a, tr, Vehicle(p)) for a in args if not a.startswith("--")]
     tau, bands = fit_yaw(runs)
     print("yaw: lag tau = %.2f s" % tau)
