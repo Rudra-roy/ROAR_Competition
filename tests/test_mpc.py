@@ -11,7 +11,9 @@ V = Vehicle.from_json(os.path.join(os.path.dirname(__file__), "..", "competition
 CFG = V.p["mpc"]
 DT = CFG["dt"]
 TAU = CFG.get("a_tau_s", V.p["brake_tau_s"])  # the shipped config's longitudinal lag
-BASE = {k: x for k, x in CFG.items() if k not in ("a_tau_s", "jerk_max", "ellipse", "a_lat_margin")}  # options off
+OPTS = ("a_tau_s", "jerk_max", "ellipse", "a_lat_margin", "beta_k", "beta_tau_s")
+BASE = {k: x for k, x in CFG.items() if k not in OPTS}  # options off
+NO_BETA = {k: x for k, x in CFG.items() if k not in ("beta_k", "beta_tau_s")}
 M = CFG.get("a_lat_margin", 1.0)
 
 
@@ -23,16 +25,20 @@ TAU_K = V.p["steer_tau_s"]
 A_MIN = -V.a_brake * V.brake_scale
 
 
+KB, TB = CFG.get("beta_k", 0.0), CFG.get("beta_tau_s", 1.0)  # shipped sideslip state (0 = off)
+
+
 def plant(x, u, kappa_ref):
-    """Exact model the MPC predicts with: x = [e_y, e_psi, v, a_act, k_act], u = [kappa, a_cmd]."""
-    e_y, e_psi, v, a, k = x
-    return np.array([e_y + DT * v * e_psi, e_psi + DT * v * (k - kappa_ref), v + DT * a,
-                     a + DT / TAU * (u[1] - a), k + DT / TAU_K * (u[0] - k)])
+    """Exact model the MPC predicts with: x = [e_y, e_psi, v, a_act, k_act, b], u = [kappa, a_cmd]."""
+    e_y, e_psi, v, a, k, b = x
+    return np.array([e_y + DT * v * (e_psi - b), e_psi + DT * v * (k - kappa_ref), v + DT * a,
+                     a + DT / TAU * (u[1] - a), k + DT / TAU_K * (u[0] - k),
+                     b + DT / TB * (KB * v * v * (k - kappa_ref) - b)])
 
 
 def closed_loop(m, x, s, kappa_fn, v_ref_fn, ticks, times=None, u_prev=(0.0, 0.0)):
     """1-tick delay: the command computed at tick k is applied during tick k+1."""
-    log = []
+    log, x = [], np.r_[x, 0.0]  # + sideslip b
     for _ in range(ticks):
         t0 = time.perf_counter()
         k, a, ok = m.solve(x[0], x[1], x[2], s, kappa_fn, v_ref_fn, u_prev)
@@ -293,3 +299,52 @@ def test_fallback_uses_unscaled_a_lat():
     assert 20.0 / v ** 2 < V.K(v)  # the a_lat bound binds, not steering
     assert abs(abs(k) - 20.0 / v ** 2) < 1e-9
 
+
+
+# ---- Task 8e: sideslip state (cfg beta_k, beta_tau_s) ----
+# Race logs (8d gate, straights): body sideslip beta = yaw - course follows the lateral accel with a lag,
+# beta ~ 0.0071 * lag(v^2 * yaw curvature, 0.40 s) (R2 0.99). The MPC's e_y' = v*e_psi ignores it.
+KB_PLANT, TB_PLANT = 0.0071, 0.40
+
+
+def slip_loop(cfg, v=65.0, ticks=200):
+    """Straight at v, 0.5 m off the line; plant = the MPC's yaw model + the sideslip lag (course = yaw - beta)."""
+    m = FrenetMPC(V, cfg)
+    ey, epsi, k, b, u, log = 0.5, 0.0, 0.0, 0.0, (0.0, 0.0), []
+    for _ in range(ticks):
+        kc, a, ok = m.solve(ey, epsi, v, 0.0, lambda s: 0.0, lambda s: v, u)
+        assert ok
+        ey, epsi, k, b = (ey + DT * v * (epsi - b), epsi + DT * v * k, k + DT / TAU_K * (u[0] - k),
+                          b + DT / TB_PLANT * (KB_PLANT * v * v * k - b))
+        u = (kc, a)
+        log.append(ey)
+    return np.array(log)
+
+
+def test_sideslip_lag_makes_a_weave_without_the_state():
+    ey = slip_loop(NO_BETA)
+    assert -ey[:80].min() > 0.25  # 8d model: > 50 % overshoot, ~0.4 Hz, slow decay (the race weave)
+    assert np.abs(ey[80:120]).max() > 0.1
+
+
+def test_sideslip_state_damps_it():
+    ey = slip_loop(dict(CFG, beta_k=KB_PLANT, beta_tau_s=TB_PLANT))
+    assert -ey.min() < 0.1, -ey.min()
+    assert np.abs(ey[80:120]).max() < 0.03
+
+
+def test_sideslip_state_model_rows():
+    """Raw horizon: b+ = b + dt/tau_b (k_b v^2 (k_act - kappa_ref) - b) and e_y+ = e_y + dt v (e_psi - b)."""
+    kb, tb = 0.01, 0.6
+    m = FrenetMPC(V, dict(CFG, beta_k=kb, beta_tau_s=tb))
+    raw = capture(m)
+    kref = 1 / 300.0
+    k, a, ok = m.solve(0.3, 0.01, 50.0, 0.0, lambda s: kref, lambda s: 50.0, (0.0, 0.0))
+    assert ok and m.NX == 6
+    z = raw[-1]
+    xs = z[:m.nx].reshape(-1, 6)
+    vk = 50.0  # the linearisation speed: first call, v = v_ref, a = 0 -> v_k = 50 over the horizon
+    np.testing.assert_allclose(xs[1:, 5], xs[:-1, 5] + DT / tb * (kb * vk ** 2 * (xs[:-1, 4] - kref) - xs[:-1, 5]),
+                               atol=2e-4)
+    np.testing.assert_allclose(xs[1:, 0], xs[:-1, 0] + DT * vk * (xs[:-1, 1] - xs[:-1, 5]), atol=2e-3)
+    assert FrenetMPC(V, NO_BETA).NX == 5  # absent = off (the 8d model)
