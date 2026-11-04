@@ -106,8 +106,9 @@ def main():
     env = dict(os.environ, ROAR_LOG="1")
     for i in range(1, runs + 1):
         for _ in range(2):  # one retry when the sim server hangs (client never connects): not a car result
-            if os.path.exists(os.path.join(ROOT, "logs", "run.csv")):
-                os.remove(os.path.join(ROOT, "logs", "run.csv"))
+            for f in ("run.csv", "hud.csv"):
+                if os.path.exists(os.path.join(ROOT, "logs", f)):
+                    os.remove(os.path.join(ROOT, "logs", f))
             out = subprocess.run([os.path.join(ROOT, "tools", "eval.sh"), "1", label], env=env, capture_output=True,
                                  text=True).stdout.strip()
             with open(os.path.join(ROOT, "results.csv")) as f:
@@ -120,6 +121,9 @@ def main():
             break
         run_csv = os.path.join(ROOT, "logs", "%s_%d.run.csv" % (label, i))
         shutil.copy(os.path.join(ROOT, "logs", "run.csv"), run_csv)
+        hud_csv = os.path.join(ROOT, "logs", "hud.csv")  # ROAR_HUD_LOG=1: keep the HUD log next to the run log
+        if os.path.exists(hud_csv):
+            shutil.copy(hud_csv, run_csv.replace(".run.csv", ".hud.csv"))
         m = summarise(run_csv, p)
         line = ("%s run %d [%s]: %s sim=%s coll=%s | max|e_y| %.2f @ %.0f, max|d_centre| %.2f @ %.0f, vmax %.1f, crashes at %s | "
                 "sec time %s (pred %s)" % (label, i, row[0], row[5], row[3] or "NA", row[4], m["max_ey"],
