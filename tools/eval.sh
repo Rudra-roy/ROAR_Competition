@@ -26,7 +26,7 @@ for i in $(seq 1 "$RUNS"); do
   if [ "$status" = up ]; then
     sleep 5
     # venv only for the client: its python3.8 breaks proton (needs >=3.9)
-    (cd "$PARENT" && source .venv/bin/activate && timeout 1800 python -u demo.py) > "$LOG.client.log" 2>&1
+    (cd "$PARENT" && source .venv/bin/activate && timeout --foreground 1800 python -u demo.py) > "$LOG.client.log" 2>&1
     sim=$(grep -oP 'Solution finished in \K[0-9.]+' "$LOG.client.log" | tail -1 | xargs -r printf '%.2f')
     coll=$(grep -c 'major collision' "$LOG.client.log")
     if [ -n "$sim" ]; then status=finished
