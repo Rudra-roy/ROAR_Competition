@@ -248,9 +248,16 @@ def kill_stale():
 
 
 async def main():
-    kill_stale()
-    start_server()
-    env = Env()
+    for attempt in range(3):  # a server can accept the port but hang loading the map under load: restart it
+        kill_stale()
+        start_server()
+        try:
+            env = Env()
+            break
+        except RuntimeError as e:
+            log("server start attempt %d failed: %r" % (attempt + 1, e))
+    else:
+        raise RuntimeError("no working server on %d after 3 attempts" % PORT)
     log("worker %d ready on %d" % (SLOT, PORT))
     print(json.dumps({"ready": SLOT}), flush=True)
     for line in sys.stdin:

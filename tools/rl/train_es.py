@@ -59,9 +59,12 @@ class Worker:
                                    os.path.join(ROOT, "tools", "rl", "worker.py"), str(slot), wt],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=open(os.path.join(wt, "logs", "rl_worker.log"), "a"), text=True, cwd=PARENT)
-        line = self.p.stdout.readline()
-        if "ready" not in line:
-            raise RuntimeError("worker %d failed: %r" % (slot, line))
+        while True:  # skip library chatter until the worker's JSON ready line (or its exit)
+            line = self.p.stdout.readline()
+            if not line:
+                raise RuntimeError("worker %d exited during start-up (see slots/wt%d/logs/rl_worker.log)" % (slot, slot))
+            if line.startswith("{") and "ready" in line:
+                break
 
     def submit(self, weights, episodes):
         job = {"weights": weights}
