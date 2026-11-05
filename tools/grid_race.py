@@ -19,10 +19,6 @@ def apply_overrides(p0, spec):
     n = len(p["a_lat_sections"])
     for kv in spec.split():
         k, v = kv.split("=")
-        if k == "ppuse":
-            on = {int(x) for x in v.split(".")}
-            p["pursuit"]["use_sec"] = [1 if j in on else 0 for j in range(n)]
-            continue
         if k.startswith("sec"):
             p["a_lat_sections"][int(k[3:])][1] = float(v)
         elif k.startswith("brk"):
@@ -32,27 +28,6 @@ def apply_overrides(p0, spec):
             cf.setdefault("thr_sec", [cf["thr"]] * n)[int(k[3:])] = float(v)
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(v)
-        elif k.startswith("tc."):  # traction control: tc.slip_on=8 tc.slip_full=16 tc.t_min=0.4
-            p.setdefault("traction_control", {"slip_on": 8.0, "slip_full": 16.0, "t_min": 0.4})[k[3:]] = float(v)
-        elif k == "pp.on":  # hybrid pure-pursuit steering with the winner's lookahead table (metres)
-            p["pursuit"] = {"la_v": [0.0, 25.0, 30.6, 36.1, 44.4, 50.0, 55.6, 69.4, 83.3],
-                            "la_m": [12.0, 19.0, 23.2, 29.6, 38.0, 46.5, 54.9, 63.4, 73.9],
-                            "gain_sec": [1.0] * n, "la_sec": [1.0] * n}
-        elif k == "ppuse":  # ppuse=2.4.5.7.8.10: sections that steer with pursuit (others keep the MPC)
-            on = {int(x) for x in v.split(".")}
-            p["pursuit"]["use_sec"] = [1 if j in on else 0 for j in range(n)]
-            continue
-        elif k.startswith("ppla"):  # ppla=0.8: scale every lookahead
-            p["pursuit"]["la_m"] = [x * float(v) for x in p["pursuit"]["la_m"]]
-        elif k.startswith("ppg"):  # ppgN=1.1: steering gain of section N; ppg=1.1 all sections
-            if k == "ppg":
-                p["pursuit"]["gain_sec"] = [float(v)] * n
-            else:
-                p["pursuit"]["gain_sec"][int(k[3:])] = float(v)
-        elif k.startswith("pb."):  # pedal_binary option: pb.dwell=3, pb.ay_min=8 (pb.on=1 with defaults)
-            pb = p.setdefault("pedal_binary", {})
-            if k != "pb.on":
-                pb[k[3:]] = float(v)
         else:
             p[k] = float(v)
     return p

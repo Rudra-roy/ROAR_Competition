@@ -44,7 +44,7 @@ ELLIPSE_DEG = (30.0, 60.0)  # 0 deg = the a_min box, 90 deg ~ the lateral tangen
 MAG_X, MAG_U = (1.0, 0.05, 10.0, 5.0, 0.01, 0.02), (0.01, 5.0)  # the last MAG_X (b) only with beta_k
 V_TAN_MIN = 10.0  # m/s, lowest tangent point of the lateral-accel bound (below it K(v) binds anyway)
 K_V_FALLBACK = 2.0  # 1/s, fallback speed P-gain
-MAX_ITER = 8000  # cold solves (first call, after a reset) with jerk rows need up to ~5k iterations
+MAX_ITER = 20000  # cold solves (first call, after a reset) with jerk rows: up to ~5k, ~9k with brake_scale 1.15
 
 
 class FrenetMPC:

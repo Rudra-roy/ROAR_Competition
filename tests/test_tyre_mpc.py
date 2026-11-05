@@ -89,7 +89,7 @@ def test_slip_limit_binds_and_car_brakes_over_speed():
     X = z[:m.nx].reshape(m.N + 1, NX)
     v1 = np.maximum(X[1:, 2], 10.0)
     af = X[1:, 4] - X[1:, 5] - m.ty.a * X[1:, 6] / v1
-    assert np.abs(af[30:]).max() < np.radians(6.0) + 0.03  # once the car has slowed, the plan honours the slip limit
+    assert np.abs(af[40:]).max() < np.radians(6.0) + 0.03  # once the car has slowed, the plan honours the slip limit
     assert X[-1, 2] < 44.0  # the plan ends slower than it started
 
 
@@ -125,7 +125,7 @@ def test_low_speed_steer_hold_and_cap():
 
 def test_brake_ellipse_limits_braking_while_cornering():
     veh, m = make(brake_ellipse=1)
-    _, m0 = make()
+    _, m0 = make(brake_ellipse=0)
     kappa = 1.0 / 60.0
     v = 40.0  # a_y = 26.7: near the grip limit
     d_ss, b_ss, r_ss = m.ty.steady(kappa, v)

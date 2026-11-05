@@ -78,8 +78,9 @@ def test_progress_fast_weave_never_backwards(real):
 
 def test_heading_error_wrap_boundary(real):
     xy, tr = real
-    assert tr.heading_error(0, tr.psi[0] + np.pi) == pytest.approx(np.pi, abs=1e-9)
-    assert tr.heading_error(0, tr.psi[0] + np.pi) > 0
+    # exactly opposite: +-pi (which side of the (-pi, pi] boundary depends on float rounding of psi + pi - psi)
+    assert abs(tr.heading_error(0, tr.psi[0] + np.pi)) == pytest.approx(np.pi, abs=1e-9)
+    assert tr.heading_error(0, tr.psi[0] + np.pi - 1e-6) > 0
 
 
 def test_relocalize_near_spawn(real):

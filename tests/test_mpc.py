@@ -362,7 +362,7 @@ def test_sideslip_option_needs_tau_and_clamps_rate():
 def test_pedal_brake_model_bounds_a_by_speed():
     """brake_model pedal_map: the a_cmd lower bound is -a_brake_max(v_k), so far above v_ref the MPC brakes harder
     than the constant limit at high speed and never asks for more than the car has at low speed."""
-    vb = Vehicle(dict(V.p, brake_model="pedal_map"))
+    vb = Vehicle(dict(V.p, brake_model="pedal_map", brake_scale=1.0))  # the measured map as is (no extra scale)
     for v in (25.0, 45.0, 65.0):
         m = FrenetMPC(vb, CFG)
         raw = capture(m)

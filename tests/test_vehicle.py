@@ -129,23 +129,6 @@ def test_brake_model_rejects_non_concave():
         Vehicle(dict(V.p, brake_model="pedal_map", pedal_map=pm)).brake_lines()
 
 
-def test_steer_cap_optional_and_speed_dependent():
-    import json, os
-    from vehicle import Vehicle
-    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
-    p.pop("steer_cap", None)
-    free = Vehicle(p)
-    big = -0.5 * free.K(40.0)  # asks steer 0.5
-    assert abs(free.steer_for(big, 40.0) - 0.5) < 1e-9
-    p["steer_cap"] = [[25.0, 1.0], [30.0, 0.07], [80.0, 0.07]]
-    capped = Vehicle(p)
-    assert abs(capped.steer_for(big, 40.0) - 0.07) < 1e-9
-    assert abs(capped.steer_for(-big, 40.0) + 0.07) < 1e-9
-    assert abs(capped.steer_for(-0.5 * capped.K(20.0), 20.0) - 0.5) < 1e-9  # below 25 m/s: uncapped
-    small = -0.03 * capped.K(40.0)
-    assert abs(capped.steer_for(small, 40.0) - 0.03) < 1e-9
-
-
 def test_scrub_off_by_default_and_conservative_chords():
     import json, os
     from vehicle import Vehicle
@@ -215,25 +198,3 @@ def test_corner_throttle_floor_per_section():
     assert v.pedals_for(-7.0, 50.0, 25.0, 0.5 * (s2 + s3))[0] == 0.8  # the pedal can supply the 5 m/s^2 difference
     assert v.pedals_for(-14.0, 50.0, 25.0, s7 - 5.0)[0] == 0.5
     assert v.pedals_for(-14.0, 50.0, 25.0)[0] == 0.5  # no s_line: the global floor
-
-
-def test_binary_pedals_average_follows_the_command():
-    import json, os
-    import numpy as np
-    from vehicle import BinaryPedals, Vehicle
-    p = json.load(open(os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "vehicle_params.json")))
-    veh = Vehicle(p)
-    bp = BinaryPedals(veh, dwell=3, ay_min=8.0)
-    v = 45.0
-    lv = veh.pedal_levels(v)
-    for a_cmd in (-15.0, -8.0, 1.0):
-        bp.err, bp.state = 0.0, None
-        got = []
-        for _ in range(60):
-            t, b = bp(a_cmd, v, 20.0)
-            assert (t, b) in BinaryPedals.STATES
-            got.append(lv[BinaryPedals.STATES.index((t, b))])
-        assert abs(np.mean(got) - a_cmd) < 0.8, (a_cmd, np.mean(got))
-        runs = np.diff(np.flatnonzero(np.diff(got) != 0))
-        assert len(runs) == 0 or runs.min() >= 3  # minimum hold respected
-    assert bp(2.0, v, 0.0) is None  # straight, accelerating: normal map

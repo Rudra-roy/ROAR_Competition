@@ -139,21 +139,6 @@ def test_line_offset_fades_in_after_start(tmp_path):
     assert abs(sol._ref(b + 1, 0.0, 0.0)[0] + 1.0) < 1e-9
 
 
-def test_pursuit_kappa_on_circle_and_straight():
-    sol, *_ = _sol()
-    sol._off = None
-    tr = sol.track
-    i = 2000
-    p, yaw = tr.xy[i], tr.psi[i]
-    s_total = (tr.s[i] - sol.progress.start_s) % tr.length
-    k = sol._pursuit_kappa(p, yaw, s_total, 30.0)
-    j = (i + int(30 / tr.ds)) % len(tr.s)
-    kmean = tr.kappa[i:j].mean() if j > i else tr.kappa[i]
-    assert abs(k - kmean) < 0.01 + 0.5 * abs(kmean)  # on the line: roughly the line's own curvature ahead
-    k_left = sol._pursuit_kappa(p + 2.0 * np.r_[-np.sin(yaw), np.cos(yaw)], yaw, s_total, 30.0)
-    assert k_left < k  # car 2 m left of the line steers back right
-
-
 def test_tyre_model_option_measures_sideslip_and_yaw_rate():
     import json
     import os
@@ -205,45 +190,6 @@ def test_start_blend_slides_reference_onto_the_line():
     assert sol._ref(START_BLEND_M + 1, 2.0, 0.0)[0] == 2.0  # blended out
 
 
-def test_hybrid_pursuit_steering_in_tyre_mode():
-    sol, loc, rpy, vel, car = _sol()
-    if not sol.tyre:
-        import pytest
-        pytest.skip("tyre MPC not selected")
-    sol._off = None
-    n = len(sol.veh.p["a_lat_sections"])
-    sol.veh.p["pursuit"] = {"la_v": [25.0, 44.0, 83.0], "la_m": [19.0, 38.0, 74.0], "gain_sec": [1.0] * n}
-    tr = sol.track
-    i = 2000
-    psi = tr.psi[i]
-    left = np.array([-np.sin(psi), np.cos(psi)])
-    for k in range(3):  # settle the start blend / first-tick logic, 2 m left of the line
-        j = i + 2 * k
-        loc.val = np.r_[tr.xy[j] + 2.0 * left, 0.0]
-        rpy.val = np.array([0.0, 0.0, tr.psi[j]])
-        vel.val = 40.0 * np.r_[np.cos(tr.psi[j]), np.sin(tr.psi[j]), 0.0]
-        asyncio.run(sol.step())
-    sol._e_y0 = 0.0  # no start blend: the full 2 m error
-    asyncio.run(sol.step())
-    k_line = float(np.mean(tr.kappa[i:i + 40]))
-    d_line = sol.mpc.ty.steady(k_line, 40.0)[0]
-    assert sol.last["kappa_cmd"] < d_line  # left of the line: steers right of the line's own steer
-    assert np.isfinite(car.control["steer"]) and abs(car.control["steer"]) <= 1.0
-
-
-def test_pursuit_section_mask():
-    sol, *_ = _sol()
-    n = len(sol.veh.p["a_lat_sections"])
-    pp = {"use_sec": [0] * n}
-    pp["use_sec"][4] = 1
-    s4, s5 = sol.veh.p["a_lat_sections"][4][0], sol.veh.p["a_lat_sections"][5][0]
-    L = sol.track.length
-    to_total = lambda ls: (ls - sol.progress.start_s) % L
-    assert sol._pp_on(to_total(0.5 * (s4 + s5)), pp)
-    assert not sol._pp_on(to_total(s4 - 5.0), pp)
-    assert sol._pp_on(0.0, {})  # no mask: everywhere
-
-
 def test_residual_policy_bounded_and_off_by_default(tmp_path):
     from submission import RESIDUAL_AHEAD_M, RESIDUAL_SCALE, ResidualPolicy
     nf = 7 + len(RESIDUAL_AHEAD_M)
@@ -275,27 +221,3 @@ def test_residual_ensemble_picks_the_section_network(tmp_path):
     x = np.zeros(nf)
     assert pol(x, 500.0)[1] > 0 and pol(x, 2000.0)[1] < 0 and pol(x, 4000.0)[1] > 1.0
     assert abs(pol(x, 50.0)[1] - pol(x, 4000.0)[1]) < 1e-12  # before the first cut = the last section (wraps)
-
-
-def test_traction_control_trims_throttle_with_slip():
-    def run(slip_deg, tc):
-        sol, loc, rpy, vel, car = _sol()  # fresh controller each time (no carried MPC / yaw-rate state)
-        sol._off = None
-        sol.residual = None
-        if tc:
-            sol.veh.p["traction_control"] = {"slip_on": 8.0, "slip_full": 16.0, "t_min": 0.4}
-        else:
-            sol.veh.p.pop("traction_control", None)
-        tr = sol.track
-        i = 300
-        psi = tr.psi[i]
-        loc.val = np.r_[tr.xy[i], 0.0]
-        rpy.val = np.array([0.0, 0.0, psi - np.radians(slip_deg)])  # course along the line, nose turned in
-        vel.val = 30.0 * np.r_[np.cos(psi), np.sin(psi), 0.0]
-        sol.v_ref = lambda s: 60.0  # far below the plan: the MPC asks for full throttle
-        asyncio.run(sol.step())
-        return car.control["throttle"]
-    full = run(20.0, False)
-    assert full > 0.9
-    assert abs(run(20.0, True) - 0.4 * full) < 0.05  # past slip_full: down to t_min
-    assert abs(run(4.0, True) - run(4.0, False)) < 1e-6  # below slip_on: untouched

@@ -165,7 +165,12 @@ def test_shipped_line_is_the_tool_output(tmp_path):
     if not os.path.exists(envelope.S25_HUD):
         pytest.skip("S25 HUD log not found")
     out = str(tmp_path / "s.npz")
-    mincurv_line.main(out, widen=np.load(envelope.LINE_8E)["xy"], factors=mincurv_line.SHIP_FACTORS)
+    saved = mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK
+    mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK = mincurv_line.SHIP_MAX_OFFSET, mincurv_line.SHIP_SHRINK
+    try:
+        mincurv_line.main(out, widen=np.load(envelope.LINE_8E)["xy"], factors=mincurv_line.SHIP_FACTORS)
+    finally:
+        mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK = saved
     a, b = np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz"))
     assert sorted(a.files) == sorted(b.files) and all(np.array_equal(a[k], b[k]) for k in a.files)
 

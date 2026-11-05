@@ -13,7 +13,7 @@ import roar_py_interface
 from mpc import FrenetMPC
 from track import TELEPORT_JUMP_M, Progress, load_track
 from tyre_mpc import TyreMPC
-from vehicle import BinaryPedals, Vehicle, load_profile
+from vehicle import Vehicle, load_profile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
@@ -111,8 +111,6 @@ class RoarCompetitionSolution:
         self._e_y0 = None  # lateral offset at the (re)start, blended out over START_BLEND_M
         rp = os.path.join(DATA, "residual.npz")
         self.residual = ResidualPolicy(rp) if os.path.exists(rp) else None
-        bp = veh.p.get("pedal_binary")  # {"dwell": ticks, "ay_min": m/s^2}: on/off pedals in corners and braking
-        self._binary = BinaryPedals(veh, bp.get("dwell", 3), bp.get("ay_min", 8.0)) if bp else None
         self.mpc = TyreMPC(veh, veh.p["mpc"]) if self.tyre else \
             FrenetMPC(veh, dict(veh.p["mpc"], **veh.p.get("mpc_kinematic", {})))
         self._yaw_prev = None
@@ -160,38 +158,6 @@ class RoarCompetitionSolution:
             return e_y - d0, e_psi - d1
         return e_y - self._off_at(s_total, 0) - d0, e_psi - self._off_at(s_total, 1) - d1
 
-    def _pursuit_kappa(self, p, yaw, s_total, lookahead):
-        """Curvature of the arc from the car through the (offset) reference point `lookahead` m ahead on the line:
-        aiming ahead makes the car turn in before the corner and cut toward the apex."""
-        tr = self.track
-        ls = (self._line_s(s_total) + lookahead) % tr.length
-        q = np.array([np.interp(ls, tr.s, tr.xy[:, k], period=tr.length) for k in (0, 1)])
-        if self._off is not None:
-            psi = float(np.interp(ls, tr.s, np.unwrap(tr.psi), period=tr.length))
-            q = q + self._off_at(s_total + lookahead, 0) * np.array([-np.sin(psi), np.cos(psi)])
-        r = q - p
-        alpha = float(np.arctan2(r[1], r[0]) - yaw)
-        alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
-        return 2.0 * np.sin(alpha) / max(float(np.hypot(*r)), 1e-3)
-
-    def _pp_on(self, s_total, pp):
-        """Pursuit steering in this section? pp["use_sec"] (one 0/1 per a_lat section; absent = everywhere). Pure pursuit
-        cuts toward the apex, so a corner with an obstacle inside (the chicane's second apex) keeps the MPC."""
-        use = pp.get("use_sec")
-        return True if use is None else bool(use[bisect.bisect_right(self.veh._starts, self._line_s(s_total)) - 1])
-
-    def _pursuit_delta(self, p, yaw, s_total, v, pp):
-        """Hybrid steering: pure pursuit on the (offset) line with a speed-scheduled lookahead (pp la_v/la_m, m/s ->
-        m, times la_sec[section]); the arc's curvature becomes a steer angle through the tyre model's steady state,
-        times gain_sec[section]."""
-        ls = self._line_s(s_total)
-        i = bisect.bisect_right(self.veh._starts, ls) - 1
-        la = float(np.interp(v, pp["la_v"], pp["la_m"])) * (pp["la_sec"][i] if pp.get("la_sec") else 1.0)
-        kappa = self._pursuit_kappa(p, yaw, s_total, max(la, 5.0))
-        ty = self.mpc.ty
-        delta = ty.steady(kappa, max(v, 1.0), self.mpc.alpha_max)[0] * (pp["gain_sec"][i] if pp.get("gain_sec") else 1.0)
-        return float(np.clip(delta, -ty.g(v), ty.g(v)))
-
     def _kappa_cmd_ref(self, s):
         """Curvature of the shifted reference: offset curve of the line plus the offset's own bending."""
         k = self._kappa_ref(s)
@@ -238,9 +204,6 @@ class RoarCompetitionSolution:
         if self.tyre:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
                                           self._v_ref_mpc, self.u_prev, self._a_lat, self._a_brk)  # kappa = delta
-            pp = self.veh.p.get("pursuit")
-            if pp and "la_m" in pp and self._pp_on(s_total, pp):  # hybrid: pursuit steering, the MPC keeps the pedals
-                kappa = self._pursuit_delta(p[:2], yaw, s_total, v, pp)
             if self.residual is not None and ok:
                 ks = [self._kappa_cmd_ref(s_total + d) for d in RESIDUAL_AHEAD_M]
                 dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa),
@@ -254,18 +217,9 @@ class RoarCompetitionSolution:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, s_total, self._kappa_cmd_ref, self._v_ref_mpc,
                                           self.u_prev, self._a_lat)
             self.u_prev = (kappa, a)
-            pp = self.veh.p.get("pursuit")  # {"la0": m, "la_k": s}: pure-pursuit steering, MPC keeps the pedals
-            if pp:
-                kappa = self._pursuit_kappa(p[:2], yaw, s_total, max(pp["la0"], pp["la_k"] * v))
             steer = self.veh.steer_for(kappa, v)
         a_y = max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total)))
-        tb = self._binary(a, v, a_y) if self._binary is not None else None
-        throttle, brake = tb if tb is not None else self.veh.pedals_for(a, v, a_y, self._line_s(s_total))
-        tc = self.veh.p.get("traction_control")  # {"slip_on": deg, "slip_full": deg, "t_min": 0..1}
-        if tc and throttle > 0 and v > 10.0:
-            over = (abs(np.degrees(beta)) - tc["slip_on"]) / max(tc["slip_full"] - tc["slip_on"], 1e-3)
-            if over > 0:  # power oversteer: trim the throttle with the slip so the rear tyres keep grip
-                throttle *= max(tc["t_min"], 1.0 - min(over, 1.0) * (1.0 - tc["t_min"]))
+        throttle, brake = self.veh.pedals_for(a, v, a_y, self._line_s(s_total))
         control = {
             "throttle": throttle,
             "steer": steer,

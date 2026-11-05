@@ -88,11 +88,6 @@ def main():
             bss = p.setdefault("brake_sec_scale", [1.0] * len(p["a_lat_sections"]))
             bss[int(k[3:])] = float(val)
             rebuild = True
-        elif k.startswith("pursuit."):  # pursuit.la0 / pursuit.la_k; pursuit.off=1 removes it
-            if k == "pursuit.off":
-                p.pop("pursuit", None)
-            else:
-                p.setdefault("pursuit", {})[k[8:]] = float(val)
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(val)
         else:

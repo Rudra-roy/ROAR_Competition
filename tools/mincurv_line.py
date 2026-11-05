@@ -58,7 +58,8 @@ ITERS = 4
 WINDOWS = [(780.0, 1060.0), (1600.0, 1780.0), (3720.0, 3860.0), (5240.0, 5500.0)]
 # Raced (Task 8h): the car slid further out than any driven path with c937 (0.5: +0.85 m at its exit) and c3835 (1.0:
 # +0.9 m, 0.5: +0.56 m); c1697 is pinned at its apex by the envelope (S25 only ~0.3 m wider). Shipped: hairpin only.
-SHIP_FACTORS = (0.0, 0.0, 0.0, 1.0)
+SHIP_FACTORS = (1.0, 1.0, 1.0, 1.0)  # shipped (w5, tyre MPC): every window, envelope shrink 0.15, cap 4.6 m
+SHIP_SHRINK, SHIP_MAX_OFFSET = 0.15, 4.6
 # every corner (c1329, the c2695/2812/2899 complex and c3993/c4113 added), for --full-width: bounds = the corridor
 # edges minus the car, per-window caps (--caps) that the race loop lowers 0.2 m at the corner that collided
 WINDOWS_ALL = [(780.0, 1060.0), (1250.0, 1420.0), (1600.0, 1780.0), (2540.0, 2960.0), (3720.0, 3860.0),
