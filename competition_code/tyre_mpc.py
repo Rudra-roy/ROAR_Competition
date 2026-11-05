@@ -303,8 +303,8 @@ class TyreMPC:
         l[NX + 6:nx:NX] = u[NX + 6:nx:NX] = c_r
         rs = self.rs
         gc = self._delta_cap(vl[:N], g)
-        l[nx:rs:2] = np.maximum(Ub[:, 0] - self.trust, -gc)  # trust region round the nominal steer, within the cap
-        u[nx:rs:2] = np.maximum(np.minimum(Ub[:, 0] + self.trust, gc), l[nx:rs:2])
+        l[nx:rs:2] = np.clip(Ub[:, 0] - self.trust, -gc, gc)  # trust region round the nominal steer, within the cap
+        u[nx:rs:2] = np.clip(Ub[:, 0] + self.trust, -gc, gc)
         l[nx + 1:rs:2], u[nx + 1:rs:2] = a_lo, ad
         if self.jerk:
             u[nx + 1] = min(ad[0], a_prev + self.jerk * dt)

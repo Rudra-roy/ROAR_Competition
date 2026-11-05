@@ -1,9 +1,11 @@
-"""Hybrid submission: offline TOPP-RA speed profile + LTV Frenet MPC tracking a fixed racing line.
+"""ROAR Monza submission: slip-aware MPC on a racing line, with learned corrections.
 
-step(): localize on the line (Progress) -> FrenetMPC (curvature, accel) -> steer / pedal maps.
+step(): localise on the line (Progress) -> errors w.r.t. the reference (racing line + learned line offset + start
+blend) -> TyreMPC (front steer angle, accel) -> per-section residual network corrections (data/residual.npz) ->
+steer / pedal maps (corner throttle floor). vehicle_params mpc.model selects TyreMPC ("tyre", shipped) or the
+earlier kinematic FrenetMPC (mpc.py).
 """
 
-import bisect
 import os
 from typing import List
 
@@ -18,6 +20,7 @@ from vehicle import Vehicle, load_profile
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 LOG_PATH = os.path.join(os.path.dirname(HERE), "logs", "run.csv")
+# kappa_cmd is the commanded curvature (FrenetMPC) or front steer angle delta in rad (TyreMPC)
 LOG_COLS = ("tick", "s_total", "line_s", "e_y", "e_psi", "yaw", "v", "v_ref", "kappa_ref", "kappa_cmd", "a_cmd",
             "steer", "throttle", "brake", "ok", "d_ref", "beta", "r")
 START_S_TOL_M = 5.0
@@ -41,6 +44,8 @@ class ResidualPolicy:
         f = np.load(path)
         self.W1, self.b1, self.W2, self.b2 = (np.asarray(f[k], float) for k in ("W1", "b1", "W2", "b2"))
         self.cuts = np.asarray(f["cuts"], float) if "cuts" in f else None
+        if self.W1.ndim == 3 and (self.cuts is None or len(self.cuts) != self.W1.shape[0]):
+            raise ValueError("residual ensemble needs one section start ('cuts') per network")
 
     def expert(self, line_s):
         """Index of the section network for line_s (an ensemble), or None for a single network."""
@@ -183,7 +188,7 @@ class RoarCompetitionSolution:
         r = float(_wrap(yaw - self._yaw_prev)) / self.mpc.dt if self._yaw_prev is not None else 0.0
         self._yaw_prev = yaw
         s_total, e_y, e_psi, _ = self.progress.update(p, yaw)
-        if teleport or self._p_prev is None or self.tick == 0 or self._e_y0 is None:
+        if teleport or self.tick == 0:
             self._e_y0 = e_y
         a_lat = self._a_lat(s_total)
         # Sideslip feed-forward: the CARLA car's body points into the turn by beta ~ k*a_lat (tools/fit_sideslip.py),
@@ -204,13 +209,15 @@ class RoarCompetitionSolution:
         if self.tyre:
             kappa, a, ok = self.mpc.solve(e_y_mpc, e_psi, v, beta, r, s_total, self._kappa_cmd_ref,
                                           self._v_ref_mpc, self.u_prev, self._a_lat, self._a_brk)  # kappa = delta
+            self._res_dd = self._res_da = 0.0
             if self.residual is not None and ok:
                 ks = [self._kappa_cmd_ref(s_total + d) for d in RESIDUAL_AHEAD_M]
                 dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa),
                                        self._line_s(s_total))
                 self._res_dd, self._res_da = dd, da
                 g = self.mpc.ty.g(v)
-                kappa, a = float(np.clip(kappa + dd, -g, g)), a + da
+                gc = float(self.mpc._delta_cap(np.array([v]), np.array([g]))[0])  # the MPC's low-speed steer cap
+                kappa, a = float(np.clip(kappa + dd, -gc, gc)), a + da
             self.u_prev = (kappa, a)
             steer = float(np.clip(-kappa / self.mpc.ty.g(v), -1.0, 1.0))
         else:

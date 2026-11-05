@@ -47,9 +47,13 @@ def test_respawn_resets_progress():
 
 
 def test_sideslip_feedforward_bounded_by_grip():
+    from mpc import FrenetMPC
     loc, rpy, vel, car = Sensor(), Sensor(), Sensor(), Car()
     sol = RoarCompetitionSolution([], car, location_sensor=loc, velocity_sensor=vel, rpy_sensor=rpy)
     asyncio.run(sol.initialize())
+    sol.tyre = False  # the feed-forward belongs to the kinematic controller (the shipped tyre MPC models beta)
+    sol.mpc = FrenetMPC(sol.veh, dict(sol.veh.p["mpc"], **sol.veh.p.get("mpc_kinematic", {})))
+    sol._off = None
     tr = sol.track
     i = int(np.argmax(np.abs(tr.kappa)))  # tightest corner, far over speed: v^2*kappa >> a_lat
     loc.val = np.r_[tr.xy[i], 0.0]
@@ -221,3 +225,13 @@ def test_residual_ensemble_picks_the_section_network(tmp_path):
     x = np.zeros(nf)
     assert pol(x, 500.0)[1] > 0 and pol(x, 2000.0)[1] < 0 and pol(x, 4000.0)[1] > 1.0
     assert abs(pol(x, 50.0)[1] - pol(x, 4000.0)[1]) < 1e-12  # before the first cut = the last section (wraps)
+
+
+def test_residual_ensemble_without_cuts_fails_at_load(tmp_path):
+    import pytest
+    from submission import RESIDUAL_AHEAD_M, ResidualPolicy
+    nf = 7 + len(RESIDUAL_AHEAD_M)
+    f = tmp_path / "bad.npz"
+    np.savez(f, W1=np.zeros((3, 16, nf)), b1=np.zeros((3, 16)), W2=np.zeros((3, 2, 16)), b2=np.zeros((3, 2)))
+    with pytest.raises(ValueError):
+        ResidualPolicy(str(f))

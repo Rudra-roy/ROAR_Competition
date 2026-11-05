@@ -19,7 +19,7 @@ python competition_runner.py
 
 Runtime dependencies are numpy, scipy and osqp only (plus `roar_py_interface` from ROAR_PY). The submission reads
 sensors through `get_last_gym_observation()` and never calls `receive_observation()` or `world.step()`.
-Everything it loads is in `competition_code/data/`:
+Its data is in `competition_code/data/`:
 
 | File | What it is |
 |---|---|
@@ -28,7 +28,7 @@ Everything it loads is in `competition_code/data/`:
 | `line_offset.npz` | a learned lateral offset of the line, per metre (see below) |
 | `vehicle_params.json` | fitted car model: pedal map, steering, tyres, per-corner grip, braking and throttle settings, controller weights |
 | `residual.npz` | learned per-section correction networks (see below) |
-| `centreline.npy` | track centreline (start-line reference) |
+| `centreline.npy` | track centreline (used by the tools, not loaded at run time) |
 
 ## How it works
 

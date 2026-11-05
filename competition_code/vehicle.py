@@ -22,6 +22,9 @@ class Vehicle:
         self._bss = [float(x) for x in bss] if bss else [1.0] * len(secs)
         if len(self._bss) != len(secs):
             raise ValueError("brake_sec_scale needs one value per a_lat section")
+        ts = (params.get("corner_throttle_floor") or {}).get("thr_sec")
+        if ts is not None and len(ts) != len(secs):
+            raise ValueError("corner_throttle_floor.thr_sec needs one value per a_lat section")
         pm = params.get("pedal_map")
         self._pm = None
         if pm:  # measured steady-state accel on one signed pedal axis u = throttle - brake (exclusive pedals)

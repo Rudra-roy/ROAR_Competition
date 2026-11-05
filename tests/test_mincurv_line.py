@@ -176,6 +176,10 @@ def test_shipped_line_is_the_tool_output(tmp_path):
 
 
 def test_full_width_widening_respects_caps_and_moves_only_windows():
+    import pytest
+    from envelope import S25_HUD as _hud
+    if not os.path.exists(_hud):
+        pytest.skip("S25 HUD log not found")
     import mincurv_line as ml
     from envelope import S25_HUD, load_xy
     from export_line import offsets

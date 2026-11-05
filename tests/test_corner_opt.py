@@ -26,6 +26,10 @@ def test_knobs_round_trip_and_bounds():
 
 
 def test_race_result_on_logged_runs():
+    import pytest
+    for f in ("gate_t_1.run.csv", "bs125_abort.run.csv"):
+        if not os.path.exists(os.path.join(ROOT, "logs", f)):
+            pytest.skip("race logs not present (logs/ is not in git)")
     p = params()
     clean = co.race_result(os.path.join(ROOT, "logs", "gate_t_1.run.csv"), p)
     assert clean is not None
