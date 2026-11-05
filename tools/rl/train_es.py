@@ -212,11 +212,12 @@ def main():
     ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
     ap.add_argument("--ensemble", action="store_true", help="one network per lap section, each graded on its own")
     ap.add_argument("--train", help="ensemble: comma list of section networks to train (others frozen)")
-    ap.add_argument("--pen-max", type=float, default=COLL_PEN_MAX, help="cap on the adaptive crash penalty")
+    ap.add_argument("--pen-max", type=float, default=None, help="cap on the adaptive crash penalty (default 80)")
     a = ap.parse_args()
-    global ENSEMBLE, COLL_PEN_MAX
+    global ENSEMBLE
     ENSEMBLE = a.ensemble
-    COLL_PEN_MAX = a.pen_max
+    if a.pen_max is not None:
+        globals()["COLL_PEN_MAX"] = a.pen_max
     if a.view:
         os.environ["ROAR_RL_VIEW"] = str(a.view)
     out = os.path.join(ROOT, "rl", a.name)
