@@ -35,6 +35,21 @@ TIMEOUT_S = 40.0
 DT = 0.05
 
 
+class NoisyAgent(RoarCompetitionAgentWrapper):
+    """Adds a slowly varying steering offset (AR(1), std `std`) to every command: trajectory variety in training
+    without teleports, so a policy cannot fit one exact path."""
+
+    def __init__(self, wrapped, std, seed):
+        super().__init__(wrapped)
+        self._rng, self._std, self._x = np.random.default_rng(seed), std, 0.0
+
+    async def apply_action(self, action):
+        if self._std > 0:
+            self._x = 0.95 * self._x + np.sqrt(1 - 0.95 ** 2) * self._std * self._rng.normal()
+            action = dict(action, steer=float(np.clip(action["steer"] + self._x, -1.0, 1.0)))
+        return await super().apply_action(action)
+
+
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
@@ -100,6 +115,70 @@ class Env:
         yaw = np.radians(tf.rotation.yaw)
         loc = carla.Location(tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5)
         self.spectator.set_transform(carla.Transform(loc, carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
+
+    async def lap(self, weights, s0, cuts, pert, noise_std, seed, warm=100.0):
+        """One continuous flying lap: placed once at s0 (on a straight), warm up `warm` m, then timed for one lap
+        with split times at the line_s values in `cuts` (in lap order from s0 + warm). -> (splits, coll_seg, impulse,
+        frac): splits[k] is None for segments the car never reached; coll_seg = segment of a collision or -1."""
+        w, veh, L = self.world, self.vehicle, self.track.length
+        xyz, rpy, vel = self.start_state(s0, pert)
+        veh.set_transform(xyz, rpy)
+        veh.set_angular_velocity(np.zeros(3))
+        veh.set_linear_3d_velocity(vel)
+        await w.step()
+        veh.set_linear_3d_velocity(vel)
+        await w.step()
+        await veh.receive_observation()
+        sol = submission.RoarCompetitionSolution(self.wps, NoisyAgent(veh, noise_std, seed), None, self.loc,
+                                                 self.vel, self.rpy, None, self.col)
+        await sol.initialize()
+        self._install(sol, weights)
+        prof0 = sol.profile_start_s
+        p0 = np.asarray(self.loc.get_last_gym_observation(), float)
+        sol.progress.update(p0, float(self.rpy.get_last_gym_observation()[2]))
+        s_car = sol.progress._s_prev
+        sol.progress.start_s = prof0
+        sol.progress._total = (s_car - prof0) % L + L
+        sol._p_prev = p0[:2]
+        sol.u_prev = (float(sol.mpc.ty.steady(np.interp(s_car, self.track.s, self.track.kappa, period=L),
+                                              float(np.linalg.norm(vel)))[0]), 0.0)
+        tot0 = sol.progress._total
+        t_start = s_car + warm
+        marks = sorted(((c - t_start) % L for c in cuts)) + [L]  # each cut, then the lap close (last segment)
+        splits, k, t, ticks, timing, t_seg0 = [None] * len(marks), 0, 0.0, 0, False, 0.0
+        while True:
+            await veh.receive_observation()
+            done = sol.progress._total - tot0 - warm  # metres since the timing start (negative while warming up)
+            imp = float(np.linalg.norm(self.col.get_last_observation().impulse_normal))
+            if imp > 100.0:
+                if not timing:
+                    return splits, 0, imp, 0.0
+                seg_len = marks[k] - (marks[k - 1] if k else 0.0)
+                frac = (done - (marks[k - 1] if k else 0.0)) / max(seg_len, 1.0)
+                return splits, k, imp, float(np.clip(frac, 0, 1))
+            await sol.step()
+            if self.spectator is not None:
+                self.chase()
+            await w.step()
+            if done >= 0 and not timing:
+                timing, ticks = True, 0
+            if timing:
+                ticks += 1
+                t = ticks * DT
+                while k < len(marks) and done >= marks[k]:
+                    splits[k], t_seg0, k = t - t_seg0, t, k + 1
+                if k >= len(marks) or done >= L:
+                    return splits, -1, 0.0, 1.0
+            if ticks * DT > 4 * TIMEOUT_S or (ticks > 60 and np.linalg.norm(self.vel.get_last_gym_observation()) < 3.0):
+                return splits, k if timing else 0, 0.0, 0.0
+
+    def _install(self, sol, weights):
+        if weights is None:
+            sol.residual = None
+        else:
+            sol.residual = submission.ResidualPolicy.__new__(submission.ResidualPolicy)
+            sol.residual.W1, sol.residual.b1, sol.residual.W2, sol.residual.b2 = (np.asarray(weights[k], float)
+                                                                                  for k in ("W1", "b1", "W2", "b2"))
 
     async def episode(self, weights, s0, s1, pert=(0.0, 0.0, 0.0)):
         w, veh = self.world, self.vehicle
@@ -176,6 +255,17 @@ async def main():
     print(json.dumps({"ready": SLOT}), flush=True)
     for line in sys.stdin:
         job = json.loads(line)
+        if "laps" in job:  # continuous flying laps: [[s0, pert, noise_std, seed], ...]
+            out = []
+            for s0, pert, nstd, seed in job["laps"]:
+                try:
+                    sp, cs, imp, fr = await env.lap(job.get("weights"), s0, job["cuts"], tuple(pert), nstd, seed)
+                except Exception as e:
+                    log("lap failed: %r" % e)
+                    sp, cs, imp, fr = [None] * len(job["cuts"]), 0, 0.0, 0.0
+                out.append({"splits": sp, "coll_seg": cs, "impulse": imp, "frac": fr})
+            print(json.dumps({"laps": out}), flush=True)
+            continue
         times, coll, imp, frac = [], [], [], []
         for ep in job["episodes"]:
             s0, s1 = ep[0], ep[1]

@@ -33,6 +33,9 @@ MATURE_GENS = 30
 PERT = (0.06, 0.7, 0.03)  # start randomisation: speed +-6 %, lateral +-0.7 m, heading +-0.03 rad
 REPS = 2  # randomised starts per segment per evaluation (same draws for every variant in a generation)
 SIGMA_MIN, SIGMA_MAX = 0.02, 0.3
+LAP_START = 4700.0  # line_s on the back straight: the one placement per lap (straight, steady speed)
+LAP_PERT = (0.03, 0.3, 0.01)  # mild start randomisation for laps
+NOISE_STD = 0.004  # steering wobble (AR(1)) in laps: trajectory variety without teleports
 SHAPES = [("W1", (NH, NF)), ("b1", (NH,)), ("W2", (2, NH)), ("b2", (2,))]
 
 
@@ -61,7 +64,10 @@ class Worker:
             raise RuntimeError("worker %d failed: %r" % (slot, line))
 
     def submit(self, weights, episodes):
-        self.p.stdin.write(json.dumps({"weights": weights, "episodes": episodes}) + "\n")
+        job = {"weights": weights}
+        job.update({"laps": episodes, "cuts": CUTS} if episodes and len(episodes[0]) == 4 and not
+                   isinstance(episodes[0][1], (int, float)) else {"episodes": episodes})
+        self.p.stdin.write(json.dumps(job) + "\n")
         self.p.stdin.flush()
 
     def result(self):
@@ -93,6 +99,20 @@ def evaluate(workers, thetas, episodes=None):
     return res
 
 
+def lap_to_segments(laps):
+    """Flatten lap results to per-segment entries for Reward: splits as times; the crash segment carries the crash;
+    segments never reached have time None (Reward fills in the policy-off pace)."""
+    times, coll, imp, frac = [], [], [], []
+    for lp in laps:
+        for k, sp in enumerate(lp["splits"]):
+            crash = lp["coll_seg"] == k
+            times.append(None if (sp is None and not crash) else (sp if sp is not None else 0.0))
+            coll.append(bool(crash))
+            imp.append(lp["impulse"] if crash else 0.0)
+            frac.append(lp["frac"] if crash else 1.0)
+    return {"times": times, "coll": coll, "impulse": imp, "frac": frac}
+
+
 class Reward:
     """Evolving reward. A crash costs pen * (1 + severity) plus the rest of the segment at the baseline pace (so
     crashing later beats crashing sooner: a gradient even when everything crashes); severity = min(impulse / 2000, 2),
@@ -108,8 +128,9 @@ class Reward:
         return float(self.per_segment(r).sum())
 
     def per_segment(self, r):
-        """Reward of each segment (time + crash cost, negated)."""
-        t = np.asarray(r["times"], float)
+        """Reward of each segment (time + crash cost, negated). A time of None = never reached (after a crash
+        earlier in the lap): counted at the policy-off pace."""
+        t = np.array([self.base[i] if x is None else x for i, x in enumerate(r["times"])], float)
         c = np.asarray(r["coll"], bool)
         frac = np.clip(np.asarray(r.get("frac", [1.0] * len(t)), float), 0.0, 1.0)
         sev = np.minimum(np.asarray(r.get("impulse", [0.0] * len(t)), float) / 2000.0, 2.0)
@@ -140,6 +161,7 @@ def main():
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init", help="start the mean from a saved policy (best.npz)")
+    ap.add_argument("--laps", action="store_true", help="continuous flying laps instead of teleported segments")
     ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
     a = ap.parse_args()
     if a.view:
@@ -180,11 +202,19 @@ def main():
             eps = rng.normal(0, 1, (a.pop // 2, n))
             thetas = [theta] + [theta + sigma * e for e in eps] + [theta - sigma * e for e in eps]
             # this generation's randomised starts (shared by every variant), plus the policy-off reference on them
-            draws = rng.uniform(-1, 1, (len(SEGMENTS) * REPS, 3)) * np.array(PERT)
-            episodes = [[s0, s1, d.tolist()] for (s0, s1), d in zip(SEGMENTS * REPS, draws)]
-            rs = evaluate(workers, [None] + thetas, episodes)
+            if a.laps:  # continuous flying laps: one placement on the back straight, splits per corner
+                draws = rng.uniform(-1, 1, (REPS, 3)) * np.array(LAP_PERT)
+                seeds = rng.integers(1, 2 ** 31, REPS)
+                episodes = [[LAP_START, d.tolist(), NOISE_STD, int(sd)] for d, sd in zip(draws, seeds)]
+                rs = [lap_to_segments(r["laps"]) for r in evaluate(workers, [None] + thetas, episodes)]
+            else:
+                draws = rng.uniform(-1, 1, (len(SEGMENTS) * REPS, 3)) * np.array(PERT)
+                episodes = [[s0, s1, d.tolist()] for (s0, s1), d in zip(SEGMENTS * REPS, draws)]
+                rs = evaluate(workers, [None] + thetas, episodes)
             ref, rs = rs[0], rs[1:]
-            reward.base = np.where(np.asarray(ref["coll"]), np.asarray(ref["times"]) * 1.0 + 5.0, np.asarray(ref["times"]))
+            rt = np.array([np.nan if x is None else x for x in ref["times"]], float)
+            prev = reward.base if len(reward.base) == len(rt) else np.full(len(rt), np.nanmean(rt))
+            reward.base = np.where(np.isnan(rt) | np.asarray(ref["coll"]), prev, rt)
             f = np.array([reward(r) for r in rs])
             f_mean = f[0]
             # per-corner shaping: rank the variants within each segment, then sum the ranks, so a gain in any corner
@@ -200,11 +230,13 @@ def main():
             r0 = rs[0]
             clean0 = not any(r0["coll"])
             crash_rate = float(np.mean([any(r["coll"]) for r in rs[1:]]))
-            gain = float(np.sum(np.asarray(ref["times"]) - np.asarray(r0["times"])))  # vs policy off, same starts
+            gain = (float(np.sum(reward.base) - np.sum(r0["times"])) if not any(r0["coll"])
+                    else float("nan"))  # vs policy off on the same starts
             improving = clean0 and gain > best
             if improving:
                 best = gain
                 np.savez(os.path.join(out, "best.npz"), **{k: np.array(x) for k, x in unflat(thetas[0]).items()})
+            r0["times"] = [x if x is not None else 0.0 for x in r0["times"]]
             print("gen %3d: mean gains %+.2f s vs policy off on the same %d starts (coll %d, ref coll %d) | crash rate "
                   "%.2f (target %.2f) | penalty %.1f | sigma %.3f | maturity %d | best clean gain %+.2f | %.0f s" % (
                       g, gain, len(episodes), sum(r0["coll"]), sum(ref["coll"]), crash_rate, reward.target(),
