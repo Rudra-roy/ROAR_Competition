@@ -237,6 +237,7 @@ def main():
             theta = np.tile(one, n // one.size) if one.size < n else one  # each section network starts as the policy
         m, v, g0, best = np.zeros(n), np.zeros(n), 0, -np.inf
         sigma = a.sigma
+    best_theta, bad_gens = (theta.copy() if a.init else None), 0
     workers = [Worker(int(s)) for s in a.slots.split(",")]
     log = open(os.path.join(out, "log.csv"), "a", newline="")
     lw = csv.writer(log)
@@ -300,6 +301,14 @@ def main():
             improving = clean0 and gain > best
             if improving:
                 best = gain
+                best_theta, bad_gens = thetas[0].copy(), 0
+            elif any(r0["coll"]):
+                bad_gens += 1
+                if bad_gens >= 3 and best_theta is not None:  # the mean drifted into crashing: roll back to the best
+                    print("mean crashed 3 generations running: rolling back to the best clean policy", flush=True)
+                    theta, m, v, bad_gens = best_theta.copy(), np.zeros(n), np.zeros(n), 0
+                    sigma = max(sigma, 0.05)
+                    reward.pen = max(reward.pen * 0.5, COLL_PEN_MIN)
                 np.savez(os.path.join(out, "best.npz"), **{k: np.array(x) for k, x in unflat(thetas[0]).items()})
             r0["times"] = [x if x is not None else 0.0 for x in r0["times"]]
             risk0 = float(np.sum(r0.get("risk", [0.0])))
