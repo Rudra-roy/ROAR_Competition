@@ -111,25 +111,34 @@ class Env:
         return np.array([p[0], p[1], z]), np.array([0.0, 0.0, yaw]), v * np.array([np.cos(yaw + beta), np.sin(yaw + beta), 0.0])
 
     def chase(self, sol=None):
-        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame), plus a
-        HUD drawn above the car: training status (from the trainer's job "info") and the live state."""
+        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame), and a
+        HUD pinned to the top-left of the view: the text is placed in the world relative to the camera each tick so it
+        stays fixed on screen. Black, thickened by drawing it at a few small offsets (CARLA has no bold font)."""
         tf = self.vehicle._base_actor.get_transform()
-        if sol is not None and sol.last is not None:
-            last = sol.last
-            lines = [self.info or "",
-                     "%3.0f km/h   slip %+5.1f deg   %s" % (last["v"] * 3.6, np.degrees(last["beta"]),
-                                                       "THR %.2f" % last["throttle"] if last["brake"] == 0
-                                                       else "BRK %.2f" % last["brake"]),
-                     "policy: d_steer %+.1f mrad  d_accel %+.2f" % (1000 * getattr(sol, "_res_dd", 0.0),
-                                                                   getattr(sol, "_res_da", 0.0))]
-            dbg = self.vehicle._base_actor.get_world().debug
-            for k, txt in enumerate(lines):
-                dbg.draw_string(carla.Location(tf.location.x, tf.location.y, tf.location.z + 4.2 - 0.9 * k), txt,
-                                draw_shadow=True, color=carla.Color(255, 255, 0) if k else carla.Color(0, 255, 255),
-                                life_time=0.07)
         yaw = np.radians(tf.rotation.yaw)
-        loc = carla.Location(tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5)
-        self.spectator.set_transform(carla.Transform(loc, carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
+        pitch = np.radians(-15.0)
+        cam = np.array([tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5])
+        self.spectator.set_transform(carla.Transform(carla.Location(*cam), carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
+        if sol is None or sol.last is None:
+            return
+        last = sol.last
+        lines = [self.info or "",
+                 "speed %3.0f km/h    slip %+5.1f deg    %s" % (last["v"] * 3.6, np.degrees(last["beta"]),
+                                                             "throttle %.2f" % last["throttle"] if last["brake"] == 0
+                                                             else "brake %.2f" % last["brake"]),
+                 "policy correction: steer %+.1f mrad    accel %+.2f m/s2" % (1000 * getattr(sol, "_res_dd", 0.0),
+                                                                             getattr(sol, "_res_da", 0.0))]
+        f = np.array([np.cos(pitch) * np.cos(yaw), np.cos(pitch) * np.sin(yaw), np.sin(pitch)])  # view direction
+        rgt = np.array([-np.sin(yaw), np.cos(yaw), 0.0])  # screen right (CARLA is left-handed: y points right)
+        up = np.cross(rgt, f)
+        up = up if up[2] > 0 else -up
+        dbg = self.vehicle._base_actor.get_world().debug
+        black = carla.Color(0, 0, 0)
+        for k, txt in enumerate(lines):
+            base = cam + 6.0 * f - 4.6 * rgt + (2.9 - 0.32 * k) * up
+            for dx, dy in ((0, 0), (0.012, 0), (0, 0.012), (0.012, 0.012)):
+                p = base + dx * rgt + dy * up
+                dbg.draw_string(carla.Location(*p), txt, draw_shadow=False, color=black, life_time=0.07)
 
     async def lap(self, weights, s0, cuts, pert, noise_std, seed, warm=100.0):
         """One continuous flying lap: placed once at s0 (on a straight), warm up `warm` m, then timed for one lap
