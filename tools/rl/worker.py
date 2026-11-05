@@ -32,6 +32,7 @@ from track import load_track  # noqa: E402
 
 REF_RUN = os.path.join(WT, "competition_code", "data", "rl_reference.run.csv")  # clean race: start states
 TIMEOUT_S = 40.0
+RISK_SLIP_DEG, RISK_EY_M = 12.0, 1.0  # near-miss thresholds: slip beyond 12 deg, more than 1 m off the line
 DT = 0.05
 
 
@@ -170,16 +171,17 @@ class Env:
         t_start = s_car + warm
         marks = sorted(((c - t_start) % L for c in cuts)) + [L]  # each cut, then the lap close (last segment)
         splits, k, t, ticks, timing, t_seg0 = [None] * len(marks), 0, 0.0, 0, False, 0.0
+        risk = [0.0] * len(marks)  # near-miss integral per segment: (slip excess / 10 deg + e_y excess / 1 m) * dt
         while True:
             await veh.receive_observation()
             done = sol.progress._total - tot0 - warm  # metres since the timing start (negative while warming up)
             imp = float(np.linalg.norm(self.col.get_last_observation().impulse_normal))
             if imp > 100.0:
                 if not timing:
-                    return splits, 0, imp, 0.0
+                    return splits, 0, imp, 0.0, risk
                 seg_len = marks[k] - (marks[k - 1] if k else 0.0)
                 frac = (done - (marks[k - 1] if k else 0.0)) / max(seg_len, 1.0)
-                return splits, k, imp, float(np.clip(frac, 0, 1))
+                return splits, k, imp, float(np.clip(frac, 0, 1)), risk
             await sol.step()
             if self.spectator is not None:
                 self.chase(sol)
@@ -189,12 +191,15 @@ class Env:
             if timing:
                 ticks += 1
                 t = ticks * DT
+                if sol.last is not None and k < len(risk):
+                    risk[k] += DT * (max(0.0, abs(np.degrees(sol.last["beta"])) - RISK_SLIP_DEG) / 10.0
+                                     + max(0.0, abs(sol.last["e_y"] - sol.last["d_ref"]) - RISK_EY_M))
                 while k < len(marks) and done >= marks[k]:
                     splits[k], t_seg0, k = t - t_seg0, t, k + 1
                 if k >= len(marks) or done >= L:
-                    return splits, -1, 0.0, 1.0
+                    return splits, -1, 0.0, 1.0, risk
             if ticks * DT > 4 * TIMEOUT_S or (ticks > 60 and np.linalg.norm(self.vel.get_last_gym_observation()) < 3.0):
-                return splits, k if timing else 0, 0.0, 0.0
+                return splits, k if timing else 0, 0.0, 0.0, risk
 
     def _install(self, sol, weights):
         if weights is None:
@@ -291,11 +296,11 @@ async def main():
             out = []
             for s0, pert, nstd, seed in job["laps"]:
                 try:
-                    sp, cs, imp, fr = await env.lap(job.get("weights"), s0, job["cuts"], tuple(pert), nstd, seed)
+                    sp, cs, imp, fr, rk = await env.lap(job.get("weights"), s0, job["cuts"], tuple(pert), nstd, seed)
                 except Exception as e:
                     log("lap failed: %r" % e)
-                    sp, cs, imp, fr = [None] * len(job["cuts"]), 0, 0.0, 0.0
-                out.append({"splits": sp, "coll_seg": cs, "impulse": imp, "frac": fr})
+                    sp, cs, imp, fr, rk = [None] * (len(job["cuts"]) + 1), 0, 0.0, 0.0, [0.0] * (len(job["cuts"]) + 1)
+                out.append({"splits": sp, "coll_seg": cs, "impulse": imp, "frac": fr, "risk": rk})
             print(json.dumps({"laps": out}), flush=True)
             continue
         times, coll, imp, frac = [], [], [], []

@@ -30,6 +30,7 @@ NF, NH = 7 + len(RESIDUAL_AHEAD_M), 16
 COLL_PEN0, COLL_PEN_MIN, COLL_PEN_MAX = 5.0, 2.0, 80.0
 TARGET_COLL_RATE = (0.30, 0.10)  # population crash rate the penalty steers toward: early (exploring) -> mature
 MATURE_GENS = 30
+RISK_W = (0.5, 4.0)  # near-miss weight (s of reward per unit of risk): early -> mature
 PERT = (0.06, 0.7, 0.03)  # start randomisation: speed +-6 %, lateral +-0.7 m, heading +-0.03 rad
 REPS = 2  # randomised starts per segment per evaluation (same draws for every variant in a generation)
 SIGMA_MIN, SIGMA_MAX = 0.02, 0.3
@@ -119,15 +120,17 @@ def evaluate(workers, thetas, episodes=None):
 def lap_to_segments(laps):
     """Flatten lap results to per-segment entries for Reward: splits as times; the crash segment carries the crash;
     segments never reached have time None (Reward fills in the policy-off pace)."""
-    times, coll, imp, frac = [], [], [], []
+    times, coll, imp, frac, risk = [], [], [], [], []
     for lp in laps:
+        rk = lp.get("risk") or [0.0] * len(lp["splits"])
         for k, sp in enumerate(lp["splits"]):
+            risk.append(float(rk[k]) if k < len(rk) else 0.0)
             crash = lp["coll_seg"] == k
             times.append(None if (sp is None and not crash) else (sp if sp is not None else 0.0))
             coll.append(bool(crash))
             imp.append(lp["impulse"] if crash else 0.0)
             frac.append(lp["frac"] if crash else 1.0)
-    return {"times": times, "coll": coll, "impulse": imp, "frac": frac}
+    return {"times": times, "coll": coll, "impulse": imp, "frac": frac, "risk": risk}
 
 
 class Reward:
@@ -153,7 +156,12 @@ class Reward:
         sev = np.minimum(np.asarray(r.get("impulse", [0.0] * len(t)), float) / 2000.0, 2.0)
         rest = np.where(c, (1.0 - frac) * self.base, 0.0)
         cost = self.pen * (1.0 + sev) * (0.5 + 0.5 * (1.0 - frac))  # the earlier in the segment, the dearer
-        return -(t + rest + cost * c)
+        risk = np.asarray(r.get("risk", [0.0] * len(t)), float)  # near misses: slip / line excess, every tick
+        return -(t + rest + cost * c + self.risk_w() * risk)
+
+    def risk_w(self):
+        a, b = RISK_W
+        return a + (b - a) * min(self.gen / MATURE_GENS, 1.0)
 
     def target(self):
         a, b = TARGET_COLL_RATE
@@ -256,6 +264,8 @@ def main():
                 best = gain
                 np.savez(os.path.join(out, "best.npz"), **{k: np.array(x) for k, x in unflat(thetas[0]).items()})
             r0["times"] = [x if x is not None else 0.0 for x in r0["times"]]
+            risk0 = float(np.sum(r0.get("risk", [0.0])))
+            print("near-miss risk of the mean policy %.2f (weight %.2f)" % (risk0, reward.risk_w()), flush=True)
             print("gen %3d: mean gains %+.2f s vs policy off on the same %d starts (coll %d, ref coll %d) | crash rate "
                   "%.2f (target %.2f) | penalty %.1f | sigma %.3f | maturity %d | best clean gain %+.2f | %.0f s" % (
                       g, gain, len(episodes), sum(r0["coll"]), sum(ref["coll"]), crash_rate, reward.target(),

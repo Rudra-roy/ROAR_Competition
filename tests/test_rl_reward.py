@@ -47,3 +47,13 @@ def test_dashboard_policy_mirror_matches_submission(tmp_path):
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "rl", "dashboard.py")).read()
     assert "RESIDUAL_AHEAD_M = %r" % (submission.RESIDUAL_AHEAD_M,) in src
     assert "RESIDUAL_SCALE = %r" % (submission.RESIDUAL_SCALE,) in src
+
+
+def test_near_miss_risk_costs_and_grows_with_maturity():
+    R = es.Reward([10.0], pen=5.0)
+    calm = {"times": [10.0], "coll": [False], "impulse": [0], "frac": [1], "risk": [0.0]}
+    edgy = {"times": [10.0], "coll": [False], "impulse": [0], "frac": [1], "risk": [1.0]}
+    assert R(calm) > R(edgy)
+    w0 = R.risk_w()
+    R.gen = 100
+    assert R.risk_w() > w0
