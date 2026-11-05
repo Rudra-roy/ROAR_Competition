@@ -82,17 +82,27 @@ class TrainView:
     def __init__(self, vehicle):
         import pygame
         self.pg = pygame
-        pygame.init()
-        self.screen = pygame.display.set_mode((self.W, self.H))
-        pygame.display.set_caption("ROAR RL training - slot %d" % SLOT)
+        self.screen = None  # the window opens at the first rendered frame (not while the sim boots)
         ext = vehicle.bounding_box.extent
         self.cam = vehicle.attach_camera_sensor(roar_py_interface.RoarPyCameraSensorDataRGB,
                                                 np.array([-2.6 * ext[0], 0.0, 3.2 * ext[2]]),
                                                 np.array([0.0, 12.0 / 180.0 * np.pi, 0.0]),
                                                 image_width=self.W, image_height=self.H)
-        self.font = pygame.font.SysFont("dejavusansmono", 20, bold=True)
-        self.big = pygame.font.SysFont("dejavusansmono", 44, bold=True)
-        self.clock = pygame.time.Clock()
+        self.clock = None
+
+    def _open(self):
+        pg = self.pg
+        pg.init()
+        self.screen = pg.display.set_mode((self.W, self.H))
+        pg.display.set_caption("ROAR RL training - slot %d" % SLOT)
+        self.font = pg.font.SysFont("dejavusansmono", 20, bold=True)
+        self.big = pg.font.SysFont("dejavusansmono", 44, bold=True)
+        self.clock = pg.time.Clock()
+
+    def pump(self):
+        """Keep the window responsive while waiting (between laps, for the next job)."""
+        if self.screen is not None:
+            self.pg.event.pump()
 
     def _bar(self, x, y, w, h, frac, color, label):
         pg = self.pg
@@ -102,6 +112,8 @@ class TrainView:
 
     def render(self, sol, info):
         pg = self.pg
+        if self.screen is None:
+            self._open()
         for e in pg.event.get():
             if e.type == pg.QUIT:  # closing the window only hides the view; training continues
                 pg.display.iconify()
@@ -327,7 +339,16 @@ async def main():
         raise RuntimeError("no working server on %d after 3 attempts" % PORT)
     log("worker %d ready on %d" % (SLOT, PORT))
     print(json.dumps({"ready": SLOT}), flush=True)
-    for line in sys.stdin:
+    import select
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if not ready:
+            if env.view is not None:
+                env.view.pump()
+            continue
+        line = sys.stdin.readline()
+        if not line:
+            break
         job = json.loads(line)
         env.info = job.get("info", "")
         if "laps" in job:  # continuous flying laps: [[s0, pert, noise_std, seed], ...]
