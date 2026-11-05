@@ -59,7 +59,7 @@ def start_server():
     env = dict(os.environ)
     env["PATH"] = ":".join(p for p in env["PATH"].split(":") if "/.venv/" not in p)
     out = open(os.path.join(WT, "logs", "rl_server_%d.log" % SLOT), "w")
-    args = ([] if VIEW else ["-RenderOffScreen"]) + ["-carla-rpc-port=%d" % PORT, "-carla-streaming-port=%d" % (PORT + 1)]
+    args = ["-RenderOffScreen", "-carla-rpc-port=%d" % PORT, "-carla-streaming-port=%d" % (PORT + 1)]
     subprocess.Popen([os.path.join(PARENT, "run_monza.sh")] + args, stdout=out, stderr=out, env=env,
                      start_new_session=True)
     import socket
@@ -71,6 +71,72 @@ def start_server():
         except OSError:
             time.sleep(1)
     raise RuntimeError("server on %d did not come up" % PORT)
+
+
+class TrainView:
+    """Game-style training window (viewed slot only): a chase camera on the car, a fixed top status bar (run,
+    generation, gain, penalty, exploration, FPS) and a bottom bar (speed, slip, pedal bars, policy corrections)."""
+
+    W, H = 1280, 720
+
+    def __init__(self, vehicle):
+        import pygame
+        self.pg = pygame
+        pygame.init()
+        self.screen = pygame.display.set_mode((self.W, self.H))
+        pygame.display.set_caption("ROAR RL training - slot %d" % SLOT)
+        ext = vehicle.bounding_box.extent
+        self.cam = vehicle.attach_camera_sensor(roar_py_interface.RoarPyCameraSensorDataRGB,
+                                                np.array([-2.6 * ext[0], 0.0, 3.2 * ext[2]]),
+                                                np.array([0.0, 12.0 / 180.0 * np.pi, 0.0]),
+                                                image_width=self.W, image_height=self.H)
+        self.font = pygame.font.SysFont("dejavusansmono", 20, bold=True)
+        self.big = pygame.font.SysFont("dejavusansmono", 44, bold=True)
+        self.clock = pygame.time.Clock()
+
+    def _bar(self, x, y, w, h, frac, color, label):
+        pg = self.pg
+        pg.draw.rect(self.screen, (60, 60, 60), (x, y, w, h))
+        pg.draw.rect(self.screen, color, (x, y, int(w * max(0.0, min(frac, 1.0))), h))
+        self.screen.blit(self.font.render(label, True, (240, 240, 240)), (x, y - 24))
+
+    def render(self, sol, info):
+        pg = self.pg
+        for e in pg.event.get():
+            if e.type == pg.QUIT:  # closing the window only hides the view; training continues
+                pg.display.iconify()
+        obs = self.cam.get_last_observation()
+        if obs is not None:
+            img = obs.get_image()
+            self.screen.blit(pg.image.fromstring(img.tobytes(), img.size, img.mode).convert(), (0, 0))
+        else:
+            self.screen.fill((20, 20, 20))
+        top = pg.Surface((self.W, 40), pg.SRCALPHA)
+        top.fill((0, 0, 0, 170))
+        self.screen.blit(top, (0, 0))
+        self.clock.tick()
+        self.screen.blit(self.font.render(info or "", True, (255, 255, 255)), (12, 9))
+        fps = self.font.render("FPS %3.0f" % self.clock.get_fps(), True, (120, 255, 120))
+        self.screen.blit(fps, (self.W - fps.get_width() - 12, 9))
+        last = getattr(sol, "last", None)
+        if last is not None:
+            bot = pg.Surface((self.W, 96), pg.SRCALPHA)
+            bot.fill((0, 0, 0, 170))
+            self.screen.blit(bot, (0, self.H - 96))
+            y0 = self.H - 96
+            self.screen.blit(self.big.render("%3.0f km/h" % (last["v"] * 3.6), True, (255, 255, 255)), (16, y0 + 22))
+            slip = np.degrees(last["beta"])
+            col = (255, 90, 90) if abs(slip) > 12 else (255, 255, 255)
+            self.screen.blit(self.font.render("SLIP %+5.1f deg" % slip, True, col), (290, y0 + 20))
+            self.screen.blit(self.font.render("LAP %4.0f m" % (last["line_s"]), True, (200, 200, 200)), (290, y0 + 56))
+            self._bar(560, y0 + 36, 180, 16, last["throttle"], (60, 200, 90), "THROTTLE")
+            self._bar(770, y0 + 36, 180, 16, last["brake"], (220, 60, 60), "BRAKE")
+            dd, da = getattr(sol, "_res_dd", 0.0), getattr(sol, "_res_da", 0.0)
+            self.screen.blit(self.font.render("POLICY steer %+5.1f mrad" % (1000 * dd), True, (120, 200, 255)),
+                             (980, y0 + 20))
+            self.screen.blit(self.font.render("POLICY accel %+5.2f m/s2" % da, True, (120, 200, 255)),
+                             (980, y0 + 56))
+        pg.display.flip()
 
 
 class Env:
@@ -89,7 +155,7 @@ class Env:
         self.vel = v.attach_velocimeter_sensor()
         self.rpy = v.attach_roll_pitch_yaw_sensor()
         self.col = v.attach_collision_sensor(np.zeros(3), np.zeros(3))
-        self.spectator = client.get_world().get_spectator() if VIEW else None
+        self.view = TrainView(v) if VIEW else None
         self.info = ""
         self.ref = np.genfromtxt(REF_RUN, delimiter=",", names=True)
         self.track = load_track(os.path.join(WT, "competition_code", "data", "racing_line.npz"))
@@ -110,36 +176,6 @@ class Env:
         p = np.array([x - e_y * np.sin(psi), y + e_y * np.cos(psi)])
         z = self.wz[int(np.argmin(np.linalg.norm(self.wz[:, :2] - p, axis=1))), 2] + 0.3
         return np.array([p[0], p[1], z]), np.array([0.0, 0.0, yaw]), v * np.array([np.cos(yaw + beta), np.sin(yaw + beta), 0.0])
-
-    def chase(self, sol=None):
-        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame), and a
-        HUD pinned to the top-left of the view: the text is placed in the world relative to the camera each tick so it
-        stays fixed on screen. Black, thickened by drawing it at a few small offsets (CARLA has no bold font)."""
-        tf = self.vehicle._base_actor.get_transform()
-        yaw = np.radians(tf.rotation.yaw)
-        pitch = np.radians(-15.0)
-        cam = np.array([tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5])
-        self.spectator.set_transform(carla.Transform(carla.Location(*cam), carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
-        if sol is None or sol.last is None:
-            return
-        last = sol.last
-        lines = [self.info or "",
-                 "speed %3.0f km/h    slip %+5.1f deg    %s" % (last["v"] * 3.6, np.degrees(last["beta"]),
-                                                             "throttle %.2f" % last["throttle"] if last["brake"] == 0
-                                                             else "brake %.2f" % last["brake"]),
-                 "policy correction: steer %+.1f mrad    accel %+.2f m/s2" % (1000 * getattr(sol, "_res_dd", 0.0),
-                                                                             getattr(sol, "_res_da", 0.0))]
-        f = np.array([np.cos(pitch) * np.cos(yaw), np.cos(pitch) * np.sin(yaw), np.sin(pitch)])  # view direction
-        rgt = np.array([-np.sin(yaw), np.cos(yaw), 0.0])  # screen right (CARLA is left-handed: y points right)
-        up = np.cross(rgt, f)
-        up = up if up[2] > 0 else -up
-        dbg = self.vehicle._base_actor.get_world().debug
-        black = carla.Color(0, 0, 0)
-        for k, txt in enumerate(lines):
-            base = cam + 6.0 * f - 4.6 * rgt + (2.9 - 0.32 * k) * up
-            for dx, dy in ((0, 0), (0.012, 0), (0, 0.012), (0.012, 0.012)):
-                p = base + dx * rgt + dy * up
-                dbg.draw_string(carla.Location(*p), txt, draw_shadow=False, color=black, life_time=0.07)
 
     async def lap(self, weights, s0, cuts, pert, noise_std, seed, warm=100.0):
         """One continuous flying lap: placed once at s0 (on a straight), warm up `warm` m, then timed for one lap
@@ -183,8 +219,8 @@ class Env:
                 frac = (done - (marks[k - 1] if k else 0.0)) / max(seg_len, 1.0)
                 return splits, k, imp, float(np.clip(frac, 0, 1)), risk
             await sol.step()
-            if self.spectator is not None:
-                self.chase(sol)
+            if self.view is not None:
+                self.view.render(sol, self.info)
             await w.step()
             if done >= 0 and not timing:
                 timing, ticks = True, 0
@@ -252,8 +288,8 @@ class Env:
             if imp > 100.0:
                 return t, True, imp, (sol.progress._total - target_total - off0) / dist
             await sol.step()
-            if self.spectator is not None:
-                self.chase()
+            if self.view is not None:
+                self.view.render(sol, self.info)
             await w.step()
             ticks += 1
             t = ticks * DT
