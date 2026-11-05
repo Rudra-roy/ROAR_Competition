@@ -30,6 +30,9 @@ NF, NH = 7 + len(RESIDUAL_AHEAD_M), 16
 COLL_PEN0, COLL_PEN_MIN, COLL_PEN_MAX = 5.0, 2.0, 80.0
 TARGET_COLL_RATE = (0.30, 0.10)  # population crash rate the penalty steers toward: early (exploring) -> mature
 MATURE_GENS = 30
+PERT = (0.06, 0.7, 0.03)  # start randomisation: speed +-6 %, lateral +-0.7 m, heading +-0.03 rad
+REPS = 2  # randomised starts per segment per evaluation (same draws for every variant in a generation)
+SIGMA_MIN, SIGMA_MAX = 0.02, 0.3
 SHAPES = [("W1", (NH, NF)), ("b1", (NH,)), ("W2", (2, NH)), ("b2", (2,))]
 
 
@@ -57,8 +60,8 @@ class Worker:
         if "ready" not in line:
             raise RuntimeError("worker %d failed: %r" % (slot, line))
 
-    def submit(self, weights):
-        self.p.stdin.write(json.dumps({"weights": weights, "episodes": SEGMENTS}) + "\n")
+    def submit(self, weights, episodes):
+        self.p.stdin.write(json.dumps({"weights": weights, "episodes": episodes}) + "\n")
         self.p.stdin.flush()
 
     def result(self):
@@ -72,8 +75,9 @@ class Worker:
             self.p.kill()
 
 
-def evaluate(workers, thetas):
-    """Score each theta (None = policy off) on all segments, spread over the workers."""
+def evaluate(workers, thetas, episodes=None):
+    """Score each theta (None = policy off) on the episodes (default: the plain segments), spread over the workers."""
+    episodes = episodes or SEGMENTS
     res = [None] * len(thetas)
     queue = list(range(len(thetas)))
     busy = {}
@@ -81,7 +85,7 @@ def evaluate(workers, thetas):
         for w in workers:
             if w not in busy and queue:
                 i = queue.pop(0)
-                w.submit(None if thetas[i] is None else unflat(thetas[i]))
+                w.submit(None if thetas[i] is None else unflat(thetas[i]), episodes)
                 busy[w] = i
         for w in list(busy):  # results come back in submission order per worker
             r = w.result()
@@ -97,7 +101,7 @@ class Reward:
     crashes are cheap enough to explore near the limit, later they dominate."""
 
     def __init__(self, base_times, pen=COLL_PEN0, gen=0):
-        self.base = np.asarray(base_times, float)
+        self.base = np.asarray(base_times, float)  # one per episode (segments x REPS when randomised)
         self.pen, self.gen = pen, gen
 
     def __call__(self, r):
@@ -135,6 +139,7 @@ def main():
     ap.add_argument("--sigma", type=float, default=0.1)
     ap.add_argument("--lr", type=float, default=0.05)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--init", help="start the mean from a saved policy (best.npz)")
     ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
     a = ap.parse_args()
     if a.view:
@@ -149,10 +154,15 @@ def main():
         theta, m, v, g0, best = st["theta"], st["m"], st["v"], int(st["gen"]) + 1, float(st["best"])
         rng = np.random.default_rng(g0)
         reward = Reward(st["base"], float(st["pen"]), int(st["mat"]))
+        sigma = float(st["sigma"]) if "sigma" in st else a.sigma
     else:
         theta = rng.normal(0, 0.3, n)
         theta[-(2 * NH + 2):] = 0.0  # output layer zero: the policy starts as "no correction"
+        if a.init:
+            f0 = np.load(a.init)
+            theta = np.concatenate([np.asarray(f0[k], float).ravel() for k, _ in SHAPES])
         m, v, g0, best = np.zeros(n), np.zeros(n), 0, -np.inf
+        sigma = a.sigma
     workers = [Worker(int(s)) for s in a.slots.split(",")]
     log = open(os.path.join(out, "log.csv"), "a", newline="")
     lw = csv.writer(log)
@@ -168,8 +178,13 @@ def main():
         for g in range(g0, g0 + a.gens):
             t0 = time.time()
             eps = rng.normal(0, 1, (a.pop // 2, n))
-            thetas = [theta] + [theta + a.sigma * e for e in eps] + [theta - a.sigma * e for e in eps]
-            rs = evaluate(workers, thetas)
+            thetas = [theta] + [theta + sigma * e for e in eps] + [theta - sigma * e for e in eps]
+            # this generation's randomised starts (shared by every variant), plus the policy-off reference on them
+            draws = rng.uniform(-1, 1, (len(SEGMENTS) * REPS, 3)) * np.array(PERT)
+            episodes = [[s0, s1, d.tolist()] for (s0, s1), d in zip(SEGMENTS * REPS, draws)]
+            rs = evaluate(workers, [None] + thetas, episodes)
+            ref, rs = rs[0], rs[1:]
+            reward.base = np.where(np.asarray(ref["coll"]), np.asarray(ref["times"]) * 1.0 + 5.0, np.asarray(ref["times"]))
             f = np.array([reward(r) for r in rs])
             f_mean = f[0]
             # per-corner shaping: rank the variants within each segment, then sum the ranks, so a gain in any corner
@@ -185,19 +200,26 @@ def main():
             r0 = rs[0]
             clean0 = not any(r0["coll"])
             crash_rate = float(np.mean([any(r["coll"]) for r in rs[1:]]))
-            improving = clean0 and -sum(r0["times"]) > best
+            gain = float(np.sum(np.asarray(ref["times"]) - np.asarray(r0["times"])))  # vs policy off, same starts
+            improving = clean0 and gain > best
             if improving:
-                best = -sum(r0["times"])
+                best = gain
                 np.savez(os.path.join(out, "best.npz"), **{k: np.array(x) for k, x in unflat(thetas[0]).items()})
-            print("gen %3d: mean %.2f s (coll %d) | pop best %.2f | crash rate %.2f (target %.2f) | penalty %.1f | "
-                  "maturity %d | best clean %.2f | %.0f s" % (g, sum(r0["times"]), sum(r0["coll"]), -max(f[1:]),
-                                                            crash_rate, reward.target(), reward.pen, reward.gen,
-                                                            -best, time.time() - t0), flush=True)
-            lw.writerow([g, sum(r0["times"]), sum(r0["coll"]), json.dumps(r0["times"]), -max(f[1:]), crash_rate,
-                         reward.pen, reward.gen])
+            print("gen %3d: mean gains %+.2f s vs policy off on the same %d starts (coll %d, ref coll %d) | crash rate "
+                  "%.2f (target %.2f) | penalty %.1f | sigma %.3f | maturity %d | best clean gain %+.2f | %.0f s" % (
+                      g, gain, len(episodes), sum(r0["coll"]), sum(ref["coll"]), crash_rate, reward.target(),
+                      reward.pen, sigma, reward.gen, best, time.time() - t0), flush=True)
+            lw.writerow([g, sum(r0["times"]), sum(r0["coll"]), json.dumps(r0["times"]), gain, crash_rate,
+                         reward.pen, reward.gen, sigma, json.dumps(ref["times"])])
             log.flush()
             reward.adapt(crash_rate, improving)
-            np.savez(st_f, theta=theta, m=m, v=v, gen=g, best=best, base=reward.base, pen=reward.pen, mat=reward.gen)
+            # exploration adapts to the crash rate (the penalty alone cannot: how far the variants stray sets it)
+            if crash_rate > 2 * reward.target():
+                sigma = max(sigma * 0.8, SIGMA_MIN)
+            elif crash_rate < 0.5 * reward.target():
+                sigma = min(sigma * 1.1, SIGMA_MAX)
+            np.savez(st_f, theta=theta, m=m, v=v, gen=g, best=best, base=reward.base, pen=reward.pen, mat=reward.gen,
+                     sigma=sigma)
     finally:
         for w in workers:
             w.close()

@@ -80,11 +80,13 @@ class Env:
         lap2 = (self.ref["s_total"] >= L) & (self.ref["s_total"] < 2 * L)
         self.r2 = {k: self.ref[k][lap2] for k in self.ref.dtype.names}
 
-    def start_state(self, line_s):
-        """(xyz, rpy, velocity vector) of the reference race at line_s on its flying lap."""
+    def start_state(self, line_s, pert=(0.0, 0.0, 0.0)):
+        """(xyz, rpy, velocity vector) of the reference race at line_s on its flying lap, perturbed by
+        pert = (speed factor - 1, lateral offset m, heading rad): randomised starts so the policy meets varied
+        situations instead of one exact trajectory per corner."""
         r, tr = self.r2, self.track
         i = int(np.argmin(np.abs(((r["line_s"] - line_s + tr.length / 2) % tr.length) - tr.length / 2)))
-        ls, e_y, yaw, v, beta = r["line_s"][i], r["e_y"][i], r["yaw"][i], r["v"][i], r["beta"][i]
+        ls, e_y, yaw, v, beta = r["line_s"][i], r["e_y"][i] + pert[1], r["yaw"][i] + pert[2], r["v"][i] * (1 + pert[0]), r["beta"][i]
         x = np.interp(ls, tr.s, tr.xy[:, 0], period=tr.length)
         y = np.interp(ls, tr.s, tr.xy[:, 1], period=tr.length)
         psi = np.interp(ls, tr.s, np.unwrap(tr.psi), period=tr.length)
@@ -99,9 +101,9 @@ class Env:
         loc = carla.Location(tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5)
         self.spectator.set_transform(carla.Transform(loc, carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
 
-    async def episode(self, weights, s0, s1):
+    async def episode(self, weights, s0, s1, pert=(0.0, 0.0, 0.0)):
         w, veh = self.world, self.vehicle
-        xyz, rpy, vel = self.start_state(s0)
+        xyz, rpy, vel = self.start_state(s0, pert)
         veh.set_transform(xyz, rpy)
         veh.set_angular_velocity(np.zeros(3))
         veh.set_linear_3d_velocity(vel)
@@ -175,9 +177,11 @@ async def main():
     for line in sys.stdin:
         job = json.loads(line)
         times, coll, imp, frac = [], [], [], []
-        for s0, s1 in job["episodes"]:
+        for ep in job["episodes"]:
+            s0, s1 = ep[0], ep[1]
+            pert = tuple(ep[2]) if len(ep) > 2 else (0.0, 0.0, 0.0)
             try:
-                t, c, i, f = await env.episode(job.get("weights"), s0, s1)
+                t, c, i, f = await env.episode(job.get("weights"), s0, s1, pert)
             except Exception as e:  # keep the worker alive; a failed episode scores as a collision
                 log("episode failed: %r" % e)
                 t, c, i, f = TIMEOUT_S, True, 0.0, 0.0
