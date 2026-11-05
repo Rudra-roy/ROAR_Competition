@@ -1,6 +1,7 @@
+#!/usr/bin/python3
 """Live training dashboard for tools/rl/train_es.py runs.
 
-  python tools/rl/dashboard.py es3            (refreshes every 10 s; close the window to quit)
+  /usr/bin/python3 tools/rl/dashboard.py es3   (system Python: the venv's tkinter is broken; refreshes every 10 s)
 
 Panels: lap-time gain of the current policy vs the plain controller per generation; crash rate of the trial variants
 against its target; adaptive penalty and exploration size; the current best policy's behaviour by slip angle
@@ -20,8 +21,26 @@ import numpy as np  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "competition_code"))
-from submission import RESIDUAL_AHEAD_M, ResidualPolicy  # noqa: E402
 from track import load_track  # noqa: E402
+
+# mirrors competition_code/submission.py (not imported: it needs the ROAR libraries, absent from the system Python)
+RESIDUAL_AHEAD_M = (0.0, 20.0, 40.0, 60.0)
+RESIDUAL_SCALE = (0.03, 4.0)
+
+
+class ResidualPolicy:
+    def __init__(self, path):
+        f = np.load(path)
+        self.W1, self.b1, self.W2, self.b2 = (np.asarray(f[k], float) for k in ("W1", "b1", "W2", "b2"))
+
+    @staticmethod
+    def features(v, beta, r, e_y, e_psi, kappas, a_cmd, delta):
+        return np.array([v / 50.0, beta * 10.0, r, e_y, e_psi * 10.0, *(np.asarray(kappas) * 50.0), a_cmd / 10.0,
+                         delta * 10.0])
+
+    def __call__(self, x):
+        o = np.tanh(self.W2 @ np.tanh(self.W1 @ x + self.b1) + self.b2)
+        return o[0] * RESIDUAL_SCALE[0], o[1] * RESIDUAL_SCALE[1]
 
 NAME = sys.argv[1] if len(sys.argv) > 1 else "es3"
 RUN = os.path.join(ROOT, "rl", NAME)

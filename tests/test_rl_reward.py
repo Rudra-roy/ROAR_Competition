@@ -38,3 +38,12 @@ def test_per_segment_reward_sums_to_total():
     r = {"times": [10.0, 18.0], "coll": [False, True], "impulse": [0, 500], "frac": [1, 0.9]}
     import numpy as np
     assert np.isclose(R.per_segment(r).sum(), R(r)) and R.per_segment(r)[0] == -10.0
+
+
+def test_dashboard_policy_mirror_matches_submission(tmp_path):
+    import numpy as np
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "competition_code"))
+    import submission
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "rl", "dashboard.py")).read()
+    assert "RESIDUAL_AHEAD_M = %r" % (submission.RESIDUAL_AHEAD_M,) in src
+    assert "RESIDUAL_SCALE = %r" % (submission.RESIDUAL_SCALE,) in src
