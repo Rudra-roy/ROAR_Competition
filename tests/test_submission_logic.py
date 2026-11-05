@@ -275,3 +275,27 @@ def test_residual_ensemble_picks_the_section_network(tmp_path):
     x = np.zeros(nf)
     assert pol(x, 500.0)[1] > 0 and pol(x, 2000.0)[1] < 0 and pol(x, 4000.0)[1] > 1.0
     assert abs(pol(x, 50.0)[1] - pol(x, 4000.0)[1]) < 1e-12  # before the first cut = the last section (wraps)
+
+
+def test_traction_control_trims_throttle_with_slip():
+    def run(slip_deg, tc):
+        sol, loc, rpy, vel, car = _sol()  # fresh controller each time (no carried MPC / yaw-rate state)
+        sol._off = None
+        sol.residual = None
+        if tc:
+            sol.veh.p["traction_control"] = {"slip_on": 8.0, "slip_full": 16.0, "t_min": 0.4}
+        else:
+            sol.veh.p.pop("traction_control", None)
+        tr = sol.track
+        i = 300
+        psi = tr.psi[i]
+        loc.val = np.r_[tr.xy[i], 0.0]
+        rpy.val = np.array([0.0, 0.0, psi - np.radians(slip_deg)])  # course along the line, nose turned in
+        vel.val = 30.0 * np.r_[np.cos(psi), np.sin(psi), 0.0]
+        sol.v_ref = lambda s: 60.0  # far below the plan: the MPC asks for full throttle
+        asyncio.run(sol.step())
+        return car.control["throttle"]
+    full = run(20.0, False)
+    assert full > 0.9
+    assert abs(run(20.0, True) - 0.4 * full) < 0.05  # past slip_full: down to t_min
+    assert abs(run(4.0, True) - run(4.0, False)) < 1e-6  # below slip_on: untouched

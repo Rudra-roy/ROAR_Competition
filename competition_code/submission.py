@@ -261,6 +261,11 @@ class RoarCompetitionSolution:
         a_y = max(abs(v * r), v * v * abs(self._kappa_cmd_ref(s_total)))
         tb = self._binary(a, v, a_y) if self._binary is not None else None
         throttle, brake = tb if tb is not None else self.veh.pedals_for(a, v, a_y, self._line_s(s_total))
+        tc = self.veh.p.get("traction_control")  # {"slip_on": deg, "slip_full": deg, "t_min": 0..1}
+        if tc and throttle > 0 and v > 10.0:
+            over = (abs(np.degrees(beta)) - tc["slip_on"]) / max(tc["slip_full"] - tc["slip_on"], 1e-3)
+            if over > 0:  # power oversteer: trim the throttle with the slip so the rear tyres keep grip
+                throttle *= max(tc["t_min"], 1.0 - min(over, 1.0) * (1.0 - tc["t_min"]))
         control = {
             "throttle": throttle,
             "steer": steer,

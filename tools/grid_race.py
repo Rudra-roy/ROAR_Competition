@@ -32,6 +32,8 @@ def apply_overrides(p0, spec):
             cf.setdefault("thr_sec", [cf["thr"]] * n)[int(k[3:])] = float(v)
         elif k.startswith("mpc."):
             p["mpc"][k[4:]] = float(v)
+        elif k.startswith("tc."):  # traction control: tc.slip_on=8 tc.slip_full=16 tc.t_min=0.4
+            p.setdefault("traction_control", {"slip_on": 8.0, "slip_full": 16.0, "t_min": 0.4})[k[3:]] = float(v)
         elif k == "pp.on":  # hybrid pure-pursuit steering with the winner's lookahead table (metres)
             p["pursuit"] = {"la_v": [0.0, 25.0, 30.6, 36.1, 44.4, 50.0, 55.6, 69.4, 83.3],
                             "la_m": [12.0, 19.0, 23.2, 29.6, 38.0, 46.5, 54.9, 63.4, 73.9],
