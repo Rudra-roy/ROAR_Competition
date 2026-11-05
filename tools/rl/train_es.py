@@ -66,8 +66,10 @@ class Worker:
             if line.startswith("{") and "ready" in line:
                 break
 
+    info = ""
+
     def submit(self, weights, episodes):
-        job = {"weights": weights}
+        job = {"weights": weights, "info": Worker.info}
         job.update({"laps": episodes, "cuts": CUTS} if episodes and len(episodes[0]) == 4 and not
                    isinstance(episodes[0][1], (int, float)) else {"episodes": episodes})
         self.p.stdin.write(json.dumps(job) + "\n")
@@ -214,6 +216,8 @@ def main():
             reward = Reward(base["times"])
         for g in range(g0, g0 + a.gens):
             t0 = time.time()
+            Worker.info = "TRAINING %s  gen %d  best gain %+.2f s/2 laps  penalty %.1f  explore %.3f" % (
+                a.name, g, best if np.isfinite(best) else 0.0, reward.pen, sigma)
             eps = rng.normal(0, 1, (a.pop // 2, n))
             thetas = [theta] + [theta + sigma * e for e in eps] + [theta - sigma * e for e in eps]
             # this generation's randomised starts (shared by every variant), plus the policy-off reference on them

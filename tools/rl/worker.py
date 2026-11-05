@@ -89,6 +89,7 @@ class Env:
         self.rpy = v.attach_roll_pitch_yaw_sensor()
         self.col = v.attach_collision_sensor(np.zeros(3), np.zeros(3))
         self.spectator = client.get_world().get_spectator() if VIEW else None
+        self.info = ""
         self.ref = np.genfromtxt(REF_RUN, delimiter=",", names=True)
         self.track = load_track(os.path.join(WT, "competition_code", "data", "racing_line.npz"))
         L = self.track.length
@@ -109,9 +110,23 @@ class Env:
         z = self.wz[int(np.argmin(np.linalg.norm(self.wz[:, :2] - p, axis=1))), 2] + 0.3
         return np.array([p[0], p[1], z]), np.array([0.0, 0.0, yaw]), v * np.array([np.cos(yaw + beta), np.sin(yaw + beta), 0.0])
 
-    def chase(self):
-        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame)."""
+    def chase(self, sol=None):
+        """Server window camera: 12 m behind and 5 m above the car, looking along its heading (CARLA frame), plus a
+        HUD drawn above the car: training status (from the trainer's job "info") and the live state."""
         tf = self.vehicle._base_actor.get_transform()
+        if sol is not None and sol.last is not None:
+            last = sol.last
+            lines = [self.info or "",
+                     "%3.0f km/h   slip %+5.1f deg   %s" % (last["v"] * 3.6, np.degrees(last["beta"]),
+                                                       "THR %.2f" % last["throttle"] if last["brake"] == 0
+                                                       else "BRK %.2f" % last["brake"]),
+                     "policy: d_steer %+.1f mrad  d_accel %+.2f" % (1000 * getattr(sol, "_res_dd", 0.0),
+                                                                   getattr(sol, "_res_da", 0.0))]
+            dbg = self.vehicle._base_actor.get_world().debug
+            for k, txt in enumerate(lines):
+                dbg.draw_string(carla.Location(tf.location.x, tf.location.y, tf.location.z + 4.2 - 0.9 * k), txt,
+                                draw_shadow=True, color=carla.Color(255, 255, 0) if k else carla.Color(0, 255, 255),
+                                life_time=0.07)
         yaw = np.radians(tf.rotation.yaw)
         loc = carla.Location(tf.location.x - 12 * np.cos(yaw), tf.location.y - 12 * np.sin(yaw), tf.location.z + 5)
         self.spectator.set_transform(carla.Transform(loc, carla.Rotation(pitch=-15, yaw=tf.rotation.yaw)))
@@ -158,7 +173,7 @@ class Env:
                 return splits, k, imp, float(np.clip(frac, 0, 1))
             await sol.step()
             if self.spectator is not None:
-                self.chase()
+                self.chase(sol)
             await w.step()
             if done >= 0 and not timing:
                 timing, ticks = True, 0
@@ -262,6 +277,7 @@ async def main():
     print(json.dumps({"ready": SLOT}), flush=True)
     for line in sys.stdin:
         job = json.loads(line)
+        env.info = job.get("info", "")
         if "laps" in job:  # continuous flying laps: [[s0, pert, noise_std, seed], ...]
             out = []
             for s0, pert, nstd, seed in job["laps"]:

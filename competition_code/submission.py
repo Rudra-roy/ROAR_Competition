@@ -232,6 +232,7 @@ class RoarCompetitionSolution:
             if self.residual is not None and ok:
                 ks = [self._kappa_cmd_ref(s_total + d) for d in RESIDUAL_AHEAD_M]
                 dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa))
+                self._res_dd, self._res_da = dd, da
                 g = self.mpc.ty.g(v)
                 kappa, a = float(np.clip(kappa + dd, -g, g)), a + da
             self.u_prev = (kappa, a)
