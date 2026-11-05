@@ -84,7 +84,7 @@ def test_eval_client_stays_in_the_guard_group():
     """GNU timeout puts itself (and the client) in a new process group unless --foreground, so race_guard's group
     kill missed demo.py when the guard was stopped (Task 8g). eval.sh must keep the client in tune.py's group."""
     src = open(os.path.join(ROOT, "tools", "eval.sh")).read()
-    assert "timeout --foreground 1800 python -u demo.py" in src
+    assert "timeout --foreground 1800 python -u tools/sim/race.py" in src
     g = subprocess.Popen(["setsid", "bash", "-c", "timeout --foreground 30 sleep 30 & echo $!; wait"],
                          stdout=subprocess.PIPE, text=True)
     pid = int(g.stdout.readline())

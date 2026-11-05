@@ -14,7 +14,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS = os.path.join(REPO, "logs")
 sys.path.insert(0, os.path.join(REPO, "competition_code"))
 
-_orig = carla.Client.set_timeout  # Wine ticks are slow (same patch as demo.py)
+_orig = carla.Client.set_timeout  # Wine ticks are slow (same patch as tools/sim/race.py)
 carla.Client.set_timeout = lambda self, t: _orig(self, max(t, 120.0))
 
 import competition_runner  # noqa: E402

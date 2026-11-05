@@ -5,21 +5,109 @@
 
 Documentation for the competition itself: https://roar.gitbook.io/roar-competition-documentation/
 
-## Running it
+## Running it (official way)
 
-The submission is `competition_code/submission.py` with its modules and data in `competition_code/`. It runs
-under the official runner exactly like the starter code:
+The submission is `competition_code/submission.py` with its modules and data in `competition_code/`. On a machine
+where the Monza CARLA server already runs (e.g. Windows, as the organizers run it), it runs like the starter code:
 
 ```bash
-pip install -r requirements.txt          # numpy (with ROAR_PY), scipy, osqp
+pip install -r requirements.txt          # numpy, scipy, osqp (Python 3.8)
 # start the Monza CARLA server, then:
 cd competition_code
-python competition_runner.py
+python competition_runner.py             # prints "Solution finished in 322.95... seconds"
 ```
 
 Runtime dependencies are numpy, scipy and osqp only (plus `roar_py_interface` from ROAR_PY). The submission reads
 sensors through `get_last_gym_observation()` and never calls `receive_observation()` or `world.step()`.
-Its data is in `competition_code/data/`:
+All data it needs is committed (table below), so nothing has to be generated or trained to reproduce the result.
+
+## Reproducing the result on Linux (step by step)
+
+Tested on Ubuntu 22.04, NVIDIA RTX 5060 Ti / RTX 4070 SUPER, X11. Monza ships as a Windows CARLA 0.9.12 build, so the
+server runs under GE-Proton 9; the Python client runs natively in a Python 3.8 venv. Needs a Vulkan GPU driver
+(`vulkaninfo --summary`), git, curl, [uv](https://astral.sh/uv), about 10 GB of disk and about 3 GB of free RAM per
+running server. No sudo or Steam.
+
+**1. Folder layout** (the scripts assume these paths; each can be overridden, see step 6):
+
+```
+~/Documents/roar_racing/
+├── .venv/              Python 3.8 venv (step 4)
+├── ROAR_PY/            git clone of augcog/ROAR_PY
+├── ROAR_Competition/   this repo, branch hybrid-mpc
+└── Monza_V1.1/Monza/   the extracted map (contains CarlaUE4.exe, CarlaUE4/, Engine/)
+~/tools/GE-Proton9-27/  Proton
+~/tools/pfx/            Proton prefix (created on first launch)
+```
+
+**2. Map.** Download Monza from https://roar.berkeley.edu/monza-map/ and extract it to
+`~/Documents/roar_racing/Monza_V1.1/Monza/`.
+
+**3. GE-Proton 9** (10 and 11 need glibc 2.38 and fail on Ubuntu 22.04):
+
+```bash
+mkdir -p ~/tools/pfx && cd ~/tools
+curl -LO https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton9-27/GE-Proton9-27.tar.gz
+tar xf GE-Proton9-27.tar.gz && rm GE-Proton9-27.tar.gz
+```
+
+**4. Code and Python environment** (carla 0.9.12 wheels exist only for Python <= 3.8):
+
+```bash
+cd ~/Documents/roar_racing
+git clone https://github.com/augcog/ROAR_PY.git
+git clone -b hybrid-mpc https://github.com/Rudra-roy/ROAR_Competition.git
+uv venv --python 3.8 .venv
+source .venv/bin/activate
+(cd ROAR_PY && uv pip install -r requirements.txt -e roar_py_core -e roar_py_carla)
+uv pip install -r ROAR_Competition/requirements.txt
+python -c "import carla, roar_py_interface, osqp, scipy; print('ok')"
+```
+
+`requirements.txt` pins what the submission needs (numpy 1.24.4, scipy 1.10.1, osqp 1.1.3; osqp must be 1.x);
+carla 0.9.12 and gymnasium 0.28.1 come from ROAR_PY. For the development tools and tests (not needed to race):
+`uv pip install -r ROAR_Competition/requirements-dev.txt`, then `PYTHONPATH= python -m pytest tests/ -q` from the
+repo root (148 tests, about 5 minutes).
+
+**5. One race, watching it.** Start the server outside the venv (Proton needs the system python >= 3.9), wait for
+port 2000, then run the race wrapper from the venv:
+
+```bash
+cd ~/Documents/roar_racing/ROAR_Competition
+deactivate 2>/dev/null; tools/sim/run_monza.sh &           # opens a 1280x720 CarlaUE4 window
+until ss -ltn | grep -q ':2000 '; do sleep 2; done          # about 10-30 s
+source ../.venv/bin/activate
+python tools/sim/race.py                                    # ROAR_HUD=1 adds a speed/lap/progress overlay
+```
+
+`tools/sim/race.py` runs the unmodified `competition_runner.py`. It only raises the CARLA client timeout from 5 s to
+120 s (the first ticks under Proton are slower than 5 s). The sim runs in synchronous mode, so wall-clock speed does
+not change the score. Expected output: `Solution finished in 322.95... seconds` (322.95 to 323.00 s), and no
+`major collision` line. Stop the server afterwards with
+`WINEPREFIX=~/tools/pfx/pfx ~/tools/GE-Proton9-27/files/bin/wineserver -k`.
+
+**6. The 5-race check.** `tools/eval.sh` starts a server, races, kills the server, and repeats:
+
+```bash
+ROAR_SERVER_ARGS=-RenderOffScreen tools/eval.sh 5 check    # appends git_sha,label,run,sim_time_s,collisions,status
+cat results.csv                                             # to results.csv; logs in logs/check_N.*
+```
+
+To race in parallel (one server per slot on port 2000+3·slot, offscreen; leave about 3 GB of RAM per slot):
+`tools/eval_slot.sh <slot> <checkout dir> <label>` prints `label,sim_time,collisions,status`, for example
+`for k in 1 2 3 4; do tools/eval_slot.sh $k . run_$k & sleep 25; done; wait`.
+
+Paths can be overridden with `ROAR_MONZA` (map folder), `ROAR_PROTON` (Proton folder), `ROAR_PFX` (prefix) and
+`ROAR_VENV` (venv, default `../.venv`).
+
+**Troubleshooting.** Use `-dx12` (already set; DX11 asserts) and never `-quality-level=Low` (missing materials crash
+the map). `time-out of 5000ms while waiting for the simulator`: run through `tools/sim/race.py`, not the runner
+directly. If a client is killed mid-race the server stays in synchronous mode and hangs: stop it with `wineserver -k`
+as above and start again. Server logs: `Monza_V1.1/Monza/CarlaUE4/Saved/Logs/CarlaUE4.log`.
+
+## Data files
+
+All in `competition_code/data/`, committed:
 
 | File | What it is |
 |---|---|
@@ -56,9 +144,10 @@ Its data is in `competition_code/data/`:
 ## Repository layout
 
 - `competition_code/` the submission (runner and infrastructure unchanged from upstream).
+- `tools/sim/` the Linux server launcher (`run_monza.sh`) and race wrapper (`race.py`).
 - `tools/` development tools: car-model fitting, line and speed-plan generation, the learning loops, race
   evaluation (`eval.sh`, `race_guard.sh`, `eval_slot.sh` for parallel simulator slots), analysis.
-- `tests/` unit tests: `PYTHONPATH= python -m pytest tests/ -q` (about 5 minutes).
+- `tests/` unit tests: `PYTHONPATH= python -m pytest tests/ -q` (about 5 minutes; needs `requirements-dev.txt`).
 
 ## Credits
 

@@ -1,0 +1,8 @@
+# Development tools (tools/) and tests (tests/). Not needed to race. Install after ROAR_PY and requirements.txt.
+-r requirements.txt
+toppra==0.6.8          # speed plan (tools/build_profile.py)
+matplotlib==3.7.5      # analysis plots
+pygame==2.6.1          # live HUD and training view
+Pillow==9.5.0          # HUD tests, line tools
+transforms3d==0.4.1
+pytest==8.3.5

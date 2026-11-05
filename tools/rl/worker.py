@@ -21,7 +21,7 @@ import numpy as np
 SLOT, WT = int(sys.argv[1]), os.path.abspath(sys.argv[2])
 VIEW = os.environ.get("ROAR_RL_VIEW") == str(SLOT)  # this slot opens a window with a chase camera
 PORT = 2000 + 3 * SLOT
-PARENT = "/home/mt-labpc/Documents/roar_racing"
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path[:0] = [os.path.join(WT, "competition_code")]
 import carla  # noqa: E402
 import roar_py_carla  # noqa: E402
@@ -60,7 +60,7 @@ def start_server():
     env["PATH"] = ":".join(p for p in env["PATH"].split(":") if "/.venv/" not in p)
     out = open(os.path.join(WT, "logs", "rl_server_%d.log" % SLOT), "w")
     args = ["-RenderOffScreen", "-carla-rpc-port=%d" % PORT, "-carla-streaming-port=%d" % (PORT + 1)]
-    subprocess.Popen([os.path.join(PARENT, "run_monza.sh")] + args, stdout=out, stderr=out, env=env,
+    subprocess.Popen([os.path.join(REPO, "tools", "sim", "run_monza.sh")] + args, stdout=out, stderr=out, env=env,
                      start_new_session=True)
     import socket
     for _ in range(300):

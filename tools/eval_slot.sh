@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # One race in an isolated sim slot. Usage: eval_slot.sh <slot 1..4> <checkout dir> <label>
 # Server: own CARLA instance on port 2000+3*slot, offscreen, own process group (never touches other slots' servers).
-# Client: demo_slot.py on that port from <checkout>/competition_code (its own logs/run.csv). Aborts at the first
+# Client: tools/sim/race.py on that port from <checkout>/competition_code (its own logs/run.csv). Aborts at the first
 # collision (kills only this slot). Prints: <label>,<sim_time or empty>,<collisions>,<finished|aborted|server_hang|crashed>
 # and keeps <checkout>/logs/<label>.run.csv (+ .client.log).
 set -u
 SLOT=$1; WT=$(cd "$2" && pwd); LABEL=$3
-PARENT=/home/mt-labpc/Documents/roar_racing
+REPO=$(cd "$(dirname "$0")/.." && pwd); VENV=${ROAR_VENV:-$(dirname "$REPO")/.venv}
 PORT=$((2000 + 3 * SLOT))
 LOG="$WT/logs/$LABEL"; mkdir -p "$WT/logs"
 SRVPATH=$(echo "$PATH" | tr ':' '\n' | grep -v '/\.venv/' | paste -sd:)
@@ -27,13 +27,13 @@ for _ in $(seq 120); do  # a CARLA server needs ~3 GB of RAM: wait for it rather
   [ "$(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo)" -ge 3000 ] && break; sleep 5
 done
 if port_open; then echo "$LABEL,,0,port_busy"; exit 2; fi
-PATH=$SRVPATH setsid "$PARENT/run_monza.sh" -RenderOffScreen -carla-rpc-port=$PORT -carla-streaming-port=$((PORT + 1)) > "$LOG.server.log" 2>&1 &
+PATH=$SRVPATH setsid "$REPO/tools/sim/run_monza.sh" -RenderOffScreen -carla-rpc-port=$PORT -carla-streaming-port=$((PORT + 1)) > "$LOG.server.log" 2>&1 &
 SRV=$!
 for _ in $(seq 300); do port_open && break; sleep 1; done
 port_open || { echo "$LABEL,,0,server_hang"; exit 2; }
 sleep 5
 rm -f "$WT/logs/run.csv"
-setsid bash -c "cd '$PARENT' && source .venv/bin/activate && ROAR_CODE='$WT/competition_code' ROAR_PORT=$PORT ROAR_LOG=1 exec timeout 1800 python -u demo_slot.py" > "$LOG.client.log" 2>&1 &
+setsid bash -c "source '$VENV/bin/activate' && ROAR_CODE='$WT/competition_code' ROAR_PORT=$PORT ROAR_LOG=1 exec timeout 1800 python -u '$REPO/tools/sim/race.py'" > "$LOG.client.log" 2>&1 &
 CPID=$!
 status=aborted
 while kill -0 "$CPID" 2>/dev/null; do

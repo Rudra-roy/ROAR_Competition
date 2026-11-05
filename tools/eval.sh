@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Usage: tools/eval.sh <runs> <label>
 # Appends to results.csv: git_sha,label,run,sim_time_s,collisions,status
-# ROAR_SERVER_ARGS (e.g. -RenderOffScreen) is passed to run_monza.sh.
+# ROAR_SERVER_ARGS (e.g. -RenderOffScreen) is passed to tools/sim/run_monza.sh. ROAR_VENV: the Python 3.8 venv
+# (default ../.venv next to this repo).
 set -u
 RUNS=${1:?usage: eval.sh <runs> <label>}; LABEL=${2:?usage: eval.sh <runs> <label>}
-REPO=$(cd "$(dirname "$0")/.." && pwd); PARENT=$(dirname "$REPO")
+REPO=$(cd "$(dirname "$0")/.." && pwd); VENV=${ROAR_VENV:-$(dirname "$REPO")/.venv}
 # proton needs system python >=3.9: drop any active venv from PATH for the server
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '/\.venv/' | paste -sd:)
 mkdir -p "$REPO/logs"
@@ -30,7 +31,7 @@ for i in $(seq 1 "$RUNS"); do
   T0=$(date +%s)
   LOG="$REPO/logs/${LABEL}_${i}"
   if port_open; then echo "$SHA,$LABEL,$i,,0,port_busy" >> "$CSV"; echo "run $i: port 2000 busy"; continue; fi
-  setsid "$PARENT/run_monza.sh" ${ROAR_SERVER_ARGS:-} > "$LOG.server.log" 2>&1 &
+  setsid "$REPO/tools/sim/run_monza.sh" ${ROAR_SERVER_ARGS:-} > "$LOG.server.log" 2>&1 &
   SRV=$!
   status=server_hang
   for _ in $(seq 300); do port_open && { status=up; break; }; sleep 1; done
@@ -38,7 +39,7 @@ for i in $(seq 1 "$RUNS"); do
   if [ "$status" = up ]; then
     sleep 5
     # venv only for the client: its python3.8 breaks proton (needs >=3.9)
-    (cd "$PARENT" && source .venv/bin/activate && timeout --foreground 1800 python -u demo.py) > "$LOG.client.log" 2>&1
+    (cd "$REPO" && source "$VENV/bin/activate" && timeout --foreground 1800 python -u tools/sim/race.py) > "$LOG.client.log" 2>&1
     sim=$(grep -oP 'Solution finished in \K[0-9.]+' "$LOG.client.log" | tail -1 | xargs -r printf '%.2f')
     coll=$(grep -c 'major collision' "$LOG.client.log")
     if [ -n "$sim" ]; then status=finished

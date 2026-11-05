@@ -1,2 +1,5 @@
-osqp==1.1.3
+# Runtime dependencies of the submission (competition_code/). Python 3.8 (carla 0.9.12 has no wheels above 3.8).
+# carla, gymnasium and roar_py_interface come from ROAR_PY: install it first (see README, step 4).
+numpy==1.24.4
 scipy==1.10.1
+osqp==1.1.3        # must be 1.x: the code uses osqp.SolverStatus and solve(raise_error=False)
