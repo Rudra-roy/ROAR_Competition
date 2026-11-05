@@ -258,3 +258,17 @@ def test_residual_policy_bounded_and_off_by_default(tmp_path):
     assert ResidualPolicy(str(f))(np.ones(nf)) == (0.0, 0.0)
     sol, *_ = _sol()
     assert sol.residual is None  # no data/residual.npz shipped: off
+
+
+def test_residual_ensemble_picks_the_section_network(tmp_path):
+    from submission import RESIDUAL_AHEAD_M, ResidualPolicy
+    nf, nh = 7 + len(RESIDUAL_AHEAD_M), 16
+    K = 3
+    W2 = np.zeros((K, 2, nh))
+    b2 = np.array([[0.0, 0.5], [0.0, -0.5], [0.0, 0.9]])  # each section network: a constant accel correction
+    f = tmp_path / "ens.npz"
+    np.savez(f, W1=np.zeros((K, nh, nf)), b1=np.zeros((K, nh)), W2=W2, b2=b2, cuts=np.array([100.0, 1000.0, 3000.0]))
+    pol = ResidualPolicy(str(f))
+    x = np.zeros(nf)
+    assert pol(x, 500.0)[1] > 0 and pol(x, 2000.0)[1] < 0 and pol(x, 4000.0)[1] > 1.0
+    assert abs(pol(x, 50.0)[1] - pol(x, 4000.0)[1]) < 1e-12  # before the first cut = the last section (wraps)

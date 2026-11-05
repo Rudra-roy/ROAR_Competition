@@ -57,3 +57,14 @@ def test_near_miss_risk_costs_and_grows_with_maturity():
     w0 = R.risk_w()
     R.gen = 100
     assert R.risk_w() > w0
+
+
+def test_ensemble_layout_and_segment_map():
+    import numpy as np
+    es.ENSEMBLE = True
+    try:
+        assert es.lap_segment_experts() == [4, 5, 0, 1, 2, 3, 4]  # back straight..bottom curve -> section networks
+        u = es.unflat(np.zeros(es.n_params() * len(es.SECT_CUTS)))
+        assert np.array(u["W1"]).shape == (6, es.NH, es.NF) and u["cuts"] == es.SECT_CUTS
+    finally:
+        es.ENSEMBLE = False

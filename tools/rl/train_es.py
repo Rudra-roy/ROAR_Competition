@@ -40,7 +40,29 @@ NOISE_STD = 0.004  # steering wobble (AR(1)) in laps: trajectory variety without
 SHAPES = [("W1", (NH, NF)), ("b1", (NH,)), ("W2", (2, NH)), ("b2", (2,))]
 
 
+ENSEMBLE = False  # set by --ensemble: one network per lap section (sections start at the sorted CUTS)
+SECT_CUTS = sorted(CUTS)
+TRACK_L = 5588.0
+
+
 def unflat(theta):
+    n1 = n_params()
+    if ENSEMBLE and theta.size == len(SECT_CUTS) * n1:
+        parts = [unflat_one(theta[k * n1:(k + 1) * n1]) for k in range(len(SECT_CUTS))]
+        out = {key: [p[key] for p in parts] for key in parts[0]}
+        out["cuts"] = SECT_CUTS
+        return out
+    return unflat_one(theta)
+
+
+def lap_segment_experts():
+    """Section network driving each timed lap segment (segments start at LAP_START + 100 m, then at each cut)."""
+    t0 = LAP_START + 100.0
+    starts = [t0] + sorted(CUTS, key=lambda c: (c - t0) % TRACK_L)
+    return [(int(np.searchsorted(SECT_CUTS, st % TRACK_L, side="right")) - 1) % len(SECT_CUTS) for st in starts]
+
+
+def unflat_one(theta):
     out, i = {}, 0
     for k, sh in SHAPES:
         n = int(np.prod(sh))
@@ -188,13 +210,16 @@ def main():
     ap.add_argument("--init", help="start the mean from a saved policy (best.npz)")
     ap.add_argument("--laps", action="store_true", help="continuous flying laps instead of teleported segments")
     ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
+    ap.add_argument("--ensemble", action="store_true", help="one network per lap section, each graded on its own")
     a = ap.parse_args()
+    global ENSEMBLE
+    ENSEMBLE = a.ensemble
     if a.view:
         os.environ["ROAR_RL_VIEW"] = str(a.view)
     out = os.path.join(ROOT, "rl", a.name)
     os.makedirs(out, exist_ok=True)
     st_f = os.path.join(out, "state.npz")
-    n = n_params()
+    n = n_params() * (len(SECT_CUTS) if a.ensemble else 1)
     rng = np.random.default_rng(0)
     if a.resume and os.path.exists(st_f):
         st = np.load(st_f)
@@ -207,7 +232,9 @@ def main():
         theta[-(2 * NH + 2):] = 0.0  # output layer zero: the policy starts as "no correction"
         if a.init:
             f0 = np.load(a.init)
-            theta = np.concatenate([np.asarray(f0[k], float).ravel() for k, _ in SHAPES])
+            one = np.asarray(f0["theta"], float) if "theta" in f0 else \
+                np.concatenate([np.asarray(f0[k], float).ravel() for k, _ in SHAPES])
+            theta = np.tile(one, n // one.size) if one.size < n else one  # each section network starts as the policy
         m, v, g0, best = np.zeros(n), np.zeros(n), 0, -np.inf
         sigma = a.sigma
     workers = [Worker(int(s)) for s in a.slots.split(",")]
@@ -250,7 +277,18 @@ def main():
             seg_ranks = np.argsort(np.argsort(F, axis=0), axis=0) / (len(F) - 1) - 0.5
             score = seg_ranks.sum(1)
             ranks = np.argsort(np.argsort(score)) / (len(score) - 1) - 0.5
-            grad = ((ranks[:len(eps)] - ranks[len(eps):])[:, None] * eps).sum(0) / (len(eps) * a.sigma)
+            if ENSEMBLE and a.laps:  # each section network graded on its own segments only
+                n1, K = n_params(), len(SECT_CUTS)
+                seg_exp = lap_segment_experts()
+                col_exp = np.array([seg_exp[j % len(seg_exp)] for j in range(F.shape[1])])
+                grad = np.zeros(n)
+                for k in range(K):
+                    Sk = F[:, col_exp == k].sum(1)
+                    rk = np.argsort(np.argsort(Sk)) / (len(Sk) - 1) - 0.5
+                    blk = slice(k * n1, (k + 1) * n1)
+                    grad[blk] = ((rk[:len(eps)] - rk[len(eps):])[:, None] * eps[:, blk]).sum(0) / (len(eps) * sigma)
+            else:
+                grad = ((ranks[:len(eps)] - ranks[len(eps):])[:, None] * eps).sum(0) / (len(eps) * sigma)
             m = 0.9 * m + 0.1 * grad
             v = 0.999 * v + 0.001 * grad ** 2
             theta = theta + a.lr * (m / (1 - 0.9 ** (g + 1))) / (np.sqrt(v / (1 - 0.999 ** (g + 1))) + 1e-8)

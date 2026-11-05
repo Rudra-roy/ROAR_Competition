@@ -33,20 +33,32 @@ RESIDUAL_SCALE = (0.03, 4.0)  # max |correction|: steer angle (rad), accel (m/s^
 
 class ResidualPolicy:
     """Learned correction on top of the MPC (tools/rl/train_es.py): a tanh MLP from the car's state to
-    (d_delta, d_accel), each bounded by RESIDUAL_SCALE. Weights in data/residual.npz (W1, b1, W2, b2); absent = off."""
+    (d_delta, d_accel), each bounded by RESIDUAL_SCALE. Weights in data/residual.npz (W1, b1, W2, b2); absent = off.
+    An ensemble stores one network per lap section (W1 of shape (K, ...), plus "cuts": the K section starts in
+    line_s); the network of the section the car is in drives (sections start on straights)."""
 
     def __init__(self, path):
         f = np.load(path)
         self.W1, self.b1, self.W2, self.b2 = (np.asarray(f[k], float) for k in ("W1", "b1", "W2", "b2"))
+        self.cuts = np.asarray(f["cuts"], float) if "cuts" in f else None
+
+    def expert(self, line_s):
+        """Index of the section network for line_s (an ensemble), or None for a single network."""
+        if self.W1.ndim < 3:
+            return None
+        return (int(np.searchsorted(self.cuts, line_s, side="right")) - 1) % len(self.cuts)
 
     @staticmethod
     def features(v, beta, r, e_y, e_psi, kappas, a_cmd, delta):
         return np.array([v / 50.0, beta * 10.0, r, e_y, e_psi * 10.0, *(np.asarray(kappas) * 50.0), a_cmd / 10.0,
                          delta * 10.0])
 
-    def __call__(self, x):
-        h = np.tanh(self.W1 @ x + self.b1)
-        o = np.tanh(self.W2 @ h + self.b2)
+    def __call__(self, x, line_s=None):
+        k = self.expert(line_s) if line_s is not None else None
+        W1, b1, W2, b2 = (self.W1, self.b1, self.W2, self.b2) if k is None else \
+            (self.W1[k], self.b1[k], self.W2[k], self.b2[k])
+        h = np.tanh(W1 @ x + b1)
+        o = np.tanh(W2 @ h + b2)
         return o[0] * RESIDUAL_SCALE[0], o[1] * RESIDUAL_SCALE[1]
 # The learned offset is fitted on flying laps; from the standing start the car is slower and drifts differently
 # (s45_1 lap 1: 0.73 m flying-lap offset sent the car 4.10 m off centre at line_s 218), so fade it in.
@@ -231,7 +243,8 @@ class RoarCompetitionSolution:
                 kappa = self._pursuit_delta(p[:2], yaw, s_total, v, pp)
             if self.residual is not None and ok:
                 ks = [self._kappa_cmd_ref(s_total + d) for d in RESIDUAL_AHEAD_M]
-                dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa))
+                dd, da = self.residual(ResidualPolicy.features(v, beta, r, e_y_mpc, e_psi, ks, a, kappa),
+                                       self._line_s(s_total))
                 self._res_dd, self._res_da = dd, da
                 g = self.mpc.ty.g(v)
                 kappa, a = float(np.clip(kappa + dd, -g, g)), a + da

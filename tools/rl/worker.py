@@ -208,6 +208,7 @@ class Env:
             sol.residual = submission.ResidualPolicy.__new__(submission.ResidualPolicy)
             sol.residual.W1, sol.residual.b1, sol.residual.W2, sol.residual.b2 = (np.asarray(weights[k], float)
                                                                                   for k in ("W1", "b1", "W2", "b2"))
+            sol.residual.cuts = np.asarray(weights["cuts"], float) if "cuts" in weights else None
 
     async def episode(self, weights, s0, s1, pert=(0.0, 0.0, 0.0)):
         w, veh = self.world, self.vehicle
@@ -228,6 +229,7 @@ class Env:
             sol.residual = submission.ResidualPolicy.__new__(submission.ResidualPolicy)
             sol.residual.W1, sol.residual.b1, sol.residual.W2, sol.residual.b2 = (np.asarray(weights[k], float)
                                                                                   for k in ("W1", "b1", "W2", "b2"))
+            sol.residual.cuts = np.asarray(weights["cuts"], float) if "cuts" in weights else None
         L = self.track.length
         prof0 = sol.profile_start_s
         target_total = (s0 - prof0) % L + L  # flying-lap profile position of the start point
