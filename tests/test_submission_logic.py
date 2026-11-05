@@ -256,8 +256,11 @@ def test_residual_policy_bounded_and_off_by_default(tmp_path):
         assert abs(dd) <= RESIDUAL_SCALE[0] + 1e-12 and abs(da) <= RESIDUAL_SCALE[1] + 1e-12
     np.savez(f, W1=np.zeros((16, nf)), b1=np.zeros(16), W2=np.zeros((2, 16)), b2=np.zeros(2))
     assert ResidualPolicy(str(f))(np.ones(nf)) == (0.0, 0.0)
+    import os
+    import submission
     sol, *_ = _sol()
-    assert sol.residual is None  # no data/residual.npz shipped: off
+    shipped = os.path.exists(os.path.join(submission.DATA, "residual.npz"))
+    assert (sol.residual is not None) == shipped  # loaded exactly when the file is shipped
 
 
 def test_residual_ensemble_picks_the_section_network(tmp_path):
