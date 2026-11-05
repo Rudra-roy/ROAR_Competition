@@ -82,21 +82,33 @@ class Worker:
 
 
 def evaluate(workers, thetas, episodes=None):
-    """Score each theta (None = policy off) on the episodes (default: the plain segments), spread over the workers."""
+    """Score each theta (None = policy off) on the episodes (default: the plain segments). Laps are dispatched one
+    (theta, lap) at a time, so every slot stays busy until the generation is done (no idle slot waiting)."""
     episodes = episodes or SEGMENTS
-    res = [None] * len(thetas)
-    queue = list(range(len(thetas)))
-    busy = {}
+    lap_mode = len(episodes[0]) == 4 and not isinstance(episodes[0][1], (int, float))
+    jobs = [(i, [ep]) for i in range(len(thetas)) for ep in episodes] if lap_mode else \
+        [(i, episodes) for i in range(len(thetas))]
+    parts = [[None] * (len(episodes) if lap_mode else 1) for _ in thetas]
+    queue, busy = list(range(len(jobs))), {}
     while queue or busy:
         for w in workers:
             if w not in busy and queue:
-                i = queue.pop(0)
-                w.submit(None if thetas[i] is None else unflat(thetas[i]), episodes)
-                busy[w] = i
-        for w in list(busy):  # results come back in submission order per worker
-            r = w.result()
-            res[busy.pop(w)] = r
-    return res
+                j = queue.pop(0)
+                i, eps = jobs[j]
+                w.submit(None if thetas[i] is None else unflat(thetas[i]), eps)
+                busy[w] = j
+        import select
+        ready, _, _ = select.select([w.p.stdout for w in busy], [], [])
+        for w in list(busy):
+            if w.p.stdout in ready:
+                j = busy.pop(w)
+                i, eps = jobs[j]
+                r = w.result()
+                if lap_mode:
+                    parts[i][episodes.index(eps[0])] = r["laps"][0]
+                else:
+                    parts[i][0] = r
+    return [{"laps": p} if lap_mode else p[0] for p in parts]
 
 
 def lap_to_segments(laps):
