@@ -211,9 +211,12 @@ def main():
     ap.add_argument("--laps", action="store_true", help="continuous flying laps instead of teleported segments")
     ap.add_argument("--view", type=int, default=0, help="slot whose server opens a window with a chase camera")
     ap.add_argument("--ensemble", action="store_true", help="one network per lap section, each graded on its own")
+    ap.add_argument("--train", help="ensemble: comma list of section networks to train (others frozen)")
+    ap.add_argument("--pen-max", type=float, default=COLL_PEN_MAX, help="cap on the adaptive crash penalty")
     a = ap.parse_args()
-    global ENSEMBLE
+    global ENSEMBLE, COLL_PEN_MAX
     ENSEMBLE = a.ensemble
+    COLL_PEN_MAX = a.pen_max
     if a.view:
         os.environ["ROAR_RL_VIEW"] = str(a.view)
     out = os.path.join(ROOT, "rl", a.name)
@@ -232,8 +235,14 @@ def main():
         theta[-(2 * NH + 2):] = 0.0  # output layer zero: the policy starts as "no correction"
         if a.init:
             f0 = np.load(a.init)
-            one = np.asarray(f0["theta"], float) if "theta" in f0 else \
-                np.concatenate([np.asarray(f0[k], float).ravel() for k, _ in SHAPES])
+            if "theta" in f0:
+                one = np.asarray(f0["theta"], float)
+            elif np.asarray(f0["W1"]).ndim == 3:  # an ensemble file: its section networks in order
+                n1k = n_params()
+                one = np.concatenate([np.concatenate([np.asarray(f0[k], float)[j].ravel() for k, _ in SHAPES])
+                                      for j in range(np.asarray(f0["W1"]).shape[0])])
+            else:
+                one = np.concatenate([np.asarray(f0[k], float).ravel() for k, _ in SHAPES])
             theta = np.tile(one, n // one.size) if one.size < n else one  # each section network starts as the policy
         m, v, g0, best = np.zeros(n), np.zeros(n), 0, -np.inf
         sigma = a.sigma
@@ -255,6 +264,12 @@ def main():
             Worker.info = "TRAINING %s  gen %d  best gain %+.2f s/2 laps  penalty %.1f  explore %.3f" % (
                 a.name, g, best if np.isfinite(best) else 0.0, reward.pen, sigma)
             eps = rng.normal(0, 1, (a.pop // 2, n))
+            if a.ensemble and a.train:  # frozen section networks: no perturbation, no update
+                n1 = n_params()
+                live = {int(x) for x in a.train.split(",")}
+                for k in range(len(SECT_CUTS)):
+                    if k not in live:
+                        eps[:, k * n1:(k + 1) * n1] = 0.0
             thetas = [theta] + [theta + sigma * e for e in eps] + [theta - sigma * e for e in eps]
             # this generation's randomised starts (shared by every variant), plus the policy-off reference on them
             if a.laps:  # continuous flying laps: one placement on the back straight, splits per corner
