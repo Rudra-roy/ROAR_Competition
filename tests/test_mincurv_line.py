@@ -160,19 +160,40 @@ def test_widen_closed_and_no_kinks(widened):
 
 
 def test_shipped_line_is_the_tool_output(tmp_path):
-    """competition_code/data/racing_line.npz == mincurv_line --widen tools/line_e115.npz --factors SHIP_FACTORS."""
+    """competition_code/data/racing_line.npz is two tool steps away from the e115 line:
+    1. tools/line_w5.npz == mincurv_line --widen tools/line_e115.npz --factors SHIP_FACTORS (the w5 line);
+    2. shipped == mincurv_line --widen tools/line_w5.npz --windows SHIP_EXIT_WINDOWS --exit-weight SHIP_EXIT_WEIGHT
+       --winner (the kink exit straightened, its stored spline kept)."""
     import envelope
-    if not os.path.exists(envelope.S25_HUD):
-        pytest.skip("S25 HUD log not found")
-    out = str(tmp_path / "s.npz")
-    saved = mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK
-    mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK = mincurv_line.SHIP_MAX_OFFSET, mincurv_line.SHIP_SHRINK
+    for f in (envelope.S25_HUD, envelope.W26_HUD):
+        if not os.path.exists(f):
+            pytest.skip("%s not found" % f)
+    ml = mincurv_line
+    same = lambda a, b: sorted(a.files) == sorted(b.files) and all(np.array_equal(a[k], b[k]) for k in a.files)  # noqa
+    saved = ml.MAX_OFFSET, ml.ENV_SHRINK
+    ml.MAX_OFFSET, ml.ENV_SHRINK = ml.SHIP_MAX_OFFSET, ml.SHIP_SHRINK
     try:
-        mincurv_line.main(out, widen=np.load(envelope.LINE_8E)["xy"], factors=mincurv_line.SHIP_FACTORS)
+        w5 = str(tmp_path / "w5.npz")
+        ml.main(w5, widen=np.load(envelope.LINE_8E)["xy"], factors=ml.SHIP_FACTORS)
+        assert same(np.load(w5), np.load(os.path.join(ml.ROOT, "tools", "line_w5.npz")))
+        d = np.load(w5)
+        out = str(tmp_path / "s.npz")
+        wins = [(a, b) for a, _, b in ml.SHIP_EXIT_WINDOWS]
+        ml.main(out, widen=d["xy"], factors=[1.0] * len(wins), windows=wins, widen_tck=(d["tck_t"], list(d["tck_c"]), 3),
+                exit_w=ml.SHIP_EXIT_WEIGHT, apexes=[p for _, p, _ in ml.SHIP_EXIT_WINDOWS], winner=True)
     finally:
-        mincurv_line.MAX_OFFSET, mincurv_line.ENV_SHRINK = saved
-    a, b = np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz"))
-    assert sorted(a.files) == sorted(b.files) and all(np.array_equal(a[k], b[k]) for k in a.files)
+        ml.MAX_OFFSET, ml.ENV_SHRINK = saved
+    assert same(np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz")))
+
+
+def test_exit_ramp_weights_rise_from_apex_to_exit():
+    L = 1000.0
+    ls = np.arange(0.0, L, 1.0)
+    kw = mincurv_line.exit_ramp(ls, L, [(100.0, 300.0)], [4.0], apexes=[200.0], blend=50.0)
+    assert np.all(kw[(ls >= 100) & (ls <= 200)] == 1.0)  # entry to apex: plain min-curvature
+    assert kw[250] == pytest.approx(3.0) and kw[300] == pytest.approx(5.0)  # linear to 1 + alpha at the exit
+    assert np.all(kw[(ls > 300) & (ls <= 350)] == 5.0)  # held over the blend after the window
+    assert np.all(kw[(ls > 350) | (ls < 100)] == 1.0)
 
 
 def test_full_width_widening_respects_caps_and_moves_only_windows():

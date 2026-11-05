@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import pytest
-from track import Track, Progress
+from track import Track, Progress, load_track
 
 NPZ = os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", "racing_line.npz")
 
@@ -9,7 +9,7 @@ NPZ = os.path.join(os.path.dirname(__file__), "..", "competition_code", "data", 
 @pytest.fixture(scope="module")
 def real():
     xy = np.load(NPZ)["xy"]
-    return xy, Track(xy)
+    return xy, load_track(NPZ)  # the line as the runtime builds it (stored spline), not a refit of the raw points
 
 
 def test_circle_curvature():
@@ -112,7 +112,8 @@ def test_relocalize_after_teleport(real):
 def test_given_spline_is_bit_identical_and_npz_loader(real, tmp_path):
     """Track(xy, tck=its own fit) == Track(xy); load_track reads xy (+ optional tck_t / tck_c) from an npz."""
     from track import fit_spline, load_track
-    xy, tr = real
+    xy = real[0]
+    tr = Track(xy)
     t, c, k = fit_spline(xy)
     tr2 = Track(xy, tck=(t, c, k))
     for a in ("s", "xy", "psi", "kappa"):

@@ -60,6 +60,10 @@ WINDOWS = [(780.0, 1060.0), (1600.0, 1780.0), (3720.0, 3860.0), (5240.0, 5500.0)
 # +0.9 m, 0.5: +0.56 m); c1697 is pinned at its apex by the envelope (S25 only ~0.3 m wider). Shipped: hairpin only.
 SHIP_FACTORS = (1.0, 1.0, 1.0, 1.0)  # shipped (w5, tyre MPC): every window, envelope shrink 0.15, cap 4.6 m
 SHIP_SHRINK, SHIP_MAX_OFFSET = 0.15, 4.6
+# then (2026-11-05) the kink's exit straightened: tools/line_w5.npz (the w5 line above) widened again over the kink
+# (window start : apex : end, line_s of w5) with the late-apex weight 4 and the winner's driven path in the envelope.
+# 322.95 -> 322.50 s. Weight 8 / 12 / 30: 322.60 / 322.90 / 323.85; the same at c1329 (1240:1330:1480) bought nothing.
+SHIP_EXIT_WINDOWS, SHIP_EXIT_WEIGHT = [(2600.0, 2705.0, 2950.0)], [4.0]
 # every corner (c1329, the c2695/2812/2899 complex and c3993/c4113 added), for --full-width: bounds = the corridor
 # edges minus the car, per-window caps (--caps) that the race loop lowers 0.2 m at the corner that collided
 WINDOWS_ALL = [(780.0, 1060.0), (1250.0, 1420.0), (1600.0, 1780.0), (2540.0, 2960.0), (3720.0, 3860.0),
@@ -98,8 +102,8 @@ def signed_offset(p, poly):
     return best
 
 
-def qp_offsets(c, nrm, lo, hi, iters=ITERS):
-    """Offsets a (p = c + a n) minimising sum |kappa|^2 ds, closed loop."""
+def qp_offsets(c, nrm, lo, hi, iters=ITERS, kw=None):
+    """Offsets a (p = c + a n) minimising sum kw |kappa|^2 ds (kw = per-point weight, default 1), closed loop."""
     n = len(c)
     I = np.arange(n)
     a = np.zeros(n)
@@ -108,6 +112,8 @@ def qp_offsets(c, nrm, lo, hi, iters=ITERS):
         p = c + a[:, None] * nrm
         ds = 0.5 * (np.linalg.norm(p - np.roll(p, 1, 0), axis=1) + np.linalg.norm(np.roll(p, -1, 0) - p, axis=1))
         wgt = 1.0 / np.maximum(ds, 0.2) ** 1.5  # |d2p|/ds^2 = kappa, times sqrt(ds) for the integral
+        if kw is not None:
+            wgt = wgt * np.sqrt(kw)
         blocks, b = [], np.zeros(2 * n)
         for k in (0, 1):
             data, cols = [], []
@@ -173,6 +179,18 @@ def smooth_straights(old_xy, centre, delta=STRAIGHT_DELTA):
     return qp_offsets(old_xy, nrm, lo, hi)[0]
 
 
+def exit_ramp(ls, L, windows, alphas, apexes=None, blend=BLEND):
+    """Per line_s curvature weight 1 + alpha_j * r: r rises linearly 0 -> 1 from window j's apex (default: its start)
+    to its end and stays 1 over the blend after it, so the QP does the window's turning up to the apex and
+    straightens the exit, where the car is on full power."""
+    kw = np.ones(len(ls))
+    for j, ((a, b), al) in enumerate(zip(windows, alphas)):
+        p = a if apexes is None or apexes[j] is None else apexes[j]
+        x = ((ls - a) % L - (p - a)) / (b - p)  # 0 at the apex, 1 at the window end
+        kw = np.where((ls - a) % L <= b - a + blend, 1 + al * np.clip(x, 0, 1), kw)
+    return kw
+
+
 def window_weight(ls, L, windows=WINDOWS, blend=BLEND):
     """Per line_s: 1 inside a window, cosine ramp to 0 over `blend` m each side, 0 elsewhere; and the window index
     (-1 outside)."""
@@ -220,17 +238,18 @@ def patch_spline(tck, u, target, free, knot_ds_u):
 
 
 def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS, full_width=False,
-                  caps=None):
+                  caps=None, tck=None, exit_w=None, apexes=None, traces=None):
     """-> (points, tck). The QP runs on the old line as the car follows it (its own smoothing spline sampled at each
     point's parameter, not the noisy points): min-curvature offsets along its normals, free only in the WINDOWS
     (cosine blended), within the proven envelope; window j's shift scaled by factors[j]. The spline is the old fit
     with dense knots and refitted coefficients over window +- (BLEND + MARGIN); the target in the margin is the old
     curve itself, so the patch meets the untouched coefficients smoothly and the curve outside window +- (BLEND +
     MARGIN) is the old one exactly. points (for tools that read xy) = the new curve's samples inside the patch, the
-    old points elsewhere."""
+    old points elsewhere. tck: the old line's stored spline (a line that was already patched; refitting its points
+    would move every corner); exit_w: per-window late-apex weight (exit_ramp), 0 = plain min-curvature."""
     from scipy.interpolate import splev
     from envelope import envelope, station
-    tck = fit_spline(old_xy)
+    tck = fit_spline(old_xy) if tck is None else tck
     u, chord = chord_u(old_xy)
     base = np.array(splev(u, tck)).T
     dx, dy = splev(u, tck, der=1)
@@ -251,14 +270,18 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0), windows=
         hi = np.abs(signed_offset(base, left)) - margin
         cap = np.where(kw >= 0, capw[np.maximum(kw, 0)], MAX_OFFSET) - SLACK
     else:
-        st, lo_s, hi_s, _, _ = envelope(old_xy, s25_xy, centre, shrink=ENV_SHRINK, cap=MAX_OFFSET)
+        st, lo_s, hi_s, _, _ = envelope(old_xy, [s25_xy] + list(traces or []), centre, shrink=ENV_SHRINK, cap=MAX_OFFSET)
         lo, hi = np.interp(sc, st, lo_s, period=Lc), np.interp(sc, st, hi_s, period=Lc)
         cap = MAX_OFFSET - SLACK
     # allowed change of the centreline offset (|d| <= cap, never forcing the old line to move); a move a along the
     # line normal changes it by a*cos(heading gap) <= a
     lo_p = np.minimum(np.maximum(lo, -cap) - dc, 0)
     hi_p = np.maximum(np.minimum(hi, cap) - dc, 0)
-    new = qp_offsets(base, nrm, w * lo_p, w * hi_p)[0]
+    kappa_w = None
+    if exit_w is not None:
+        ap = [x for x, k in zip(apexes or [None] * len(windows), keep) if k]
+        kappa_w = exit_ramp(ls, tr.length, wins, [e for e, k in zip(exit_w, keep) if k], ap)
+    new = qp_offsets(base, nrm, w * lo_p, w * hi_p, kw=kappa_w)[0]
     f = np.where(kw >= 0, fac[np.maximum(kw, 0)], 0.0) if len(fac) else np.zeros(len(ls))
     new = base + f[:, None] * (new - base)
     patch = window_weight(ls, tr.length, wins, blend=BLEND + MARGIN)[0] > 0
@@ -281,14 +304,15 @@ def remap_sections(old_xy, new_xy, sections):
 
 
 def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS,
-         full_width=False, caps=None):
+         full_width=False, caps=None, widen_tck=None, exit_w=None, apexes=None, winner=False):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
     tck = None
     dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(),  # noqa: E731
                              np.abs(offsets(Track(xy, tck=tck).xy, centre)[0]).max())
     if widen is not None:
-        from envelope import S25_HUD, load_xy
-        xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors, windows, full_width, caps)
+        from envelope import S25_HUD, W26_HUD, load_xy
+        xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors, windows, full_width, caps, widen_tck, exit_w,
+                                apexes, [load_xy(W26_HUD)] if winner else None)
         mode = "widen %s%s" % (",".join("%g" % f for f in factors), " full-width caps %s" % caps if full_width else "")
         dmax = dmax_of(xy)
     elif straights is not None:  # no slack in this mode: the bounds come from the raced line
@@ -333,12 +357,22 @@ if __name__ == "__main__":
     ap.add_argument("--all-corners", action="store_true", help="use WINDOWS_ALL (7 corners)")
     ap.add_argument("--full-width", action="store_true", help="bounds = the road edges minus the car, not the envelope")
     ap.add_argument("--caps", help="per-window |d_centre| caps, m (full-width mode)")
+    ap.add_argument("--windows", help="custom corner windows, line_s of the --widen line: A:B or A:APEX:B, comma-sep")
+    ap.add_argument("--winner", action="store_true", help="add the Summer 2026 winner's driven path to the envelope")
+    ap.add_argument("--exit-weight", help="per-window late-apex weight (exit_ramp), e.g. 0,4")
     a = ap.parse_args()
     MAX_OFFSET, ENV_SHRINK = a.max_offset, a.shrink
     wins = WINDOWS_ALL if a.all_corners else WINDOWS
+    if a.windows:
+        spec = [[float(x) for x in w.split(":")] for w in a.windows.split(",")]
+        wins = [(w[0], w[-1]) for w in spec]
+        apx = [w[1] if len(w) == 3 else None for w in spec]
     facs = [float(x) for x in a.factors.split(",")]
     if len(facs) != len(wins):
         facs = [1.0] * len(wins)
     caps = [float(x) for x in a.caps.split(",")] if a.caps else None
-    main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], a.widen and np.load(a.widen)["xy"],
-         facs, wins, a.full_width, caps)
+    wd = np.load(a.widen) if a.widen else None
+    wtck = (wd["tck_t"], list(wd["tck_c"]), 3) if wd is not None and "tck_t" in wd else None  # keep a patched spline
+    ew = [float(x) for x in a.exit_weight.split(",")] if a.exit_weight else None
+    main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], wd["xy"] if wd is not None else None,
+         facs, wins, a.full_width, caps, wtck, ew, apx if a.windows else None, a.winner)

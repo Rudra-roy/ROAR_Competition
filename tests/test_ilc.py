@@ -2,6 +2,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 import ilc  # noqa: E402
@@ -46,3 +47,10 @@ def test_target_pulls_in_only_beyond_cap():
     t = ilc.target(o, cap=3.8)
     assert np.allclose(t, [0, 0, 0, -0.15, 0.1, 0.4])
     assert np.all(np.abs(o + t) <= 3.8 + 1e-12)
+
+
+def test_window_is_one_inside_zero_outside_and_ramps():
+    s = np.arange(0.0, 1000.0, 1.0)
+    w = ilc.window(s, 400.0, 600.0)
+    assert np.all(w[(s >= 400) & (s <= 600)] == 1.0) and np.all(w[(s <= 360) | (s >= 640)] == 0.0)
+    assert w[380] == pytest.approx(0.5)

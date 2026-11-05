@@ -22,6 +22,8 @@ from scipy.spatial import cKDTree
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(R, "competition_code", "data")
 S25_HUD = os.path.join(os.path.dirname(R), "sandbox_s25", "logs", "s25_xy.hud.csv")
+# the Summer 2026 winner (micahc123/roar2026) raced in our sim, 319.75 s, 0 collisions: telemetry only, like S25
+W26_HUD = os.path.join(os.path.dirname(R), "sandbox_w26", "logs", "w26_xy.hud.csv")
 SHRINK = 0.3
 CAP = 4.0
 LINE_8E = os.path.join(R, "tools", "line_e115.npz")  # the line the e115 runs drove (racing_line.npz at 8d1f3a4)
@@ -61,13 +63,13 @@ def passes(xy, centre, st):
 
 
 def envelope(line_xy, s25_xy, centre, shrink=SHRINK, cap=CAP):
-    """-> stations, lo, hi (line bounds), lo_raw, hi_raw (see module doc)."""
+    """-> stations, lo, hi (line bounds), lo_raw, hi_raw (see module doc). s25_xy: one driven trace or a list."""
     seg = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1)
     st, L = np.r_[0.0, np.cumsum(seg)[:-1]], seg.sum()
     s, d = station(line_xy, centre)
     o = np.argsort(s)
     ours = np.interp(st, s[o], d[o], period=L)
-    car = passes(s25_xy, centre, st)
+    car = np.vstack([passes(x, centre, st) for x in (s25_xy if isinstance(s25_xy, list) else [s25_xy])])
     s_lo, s_hi = np.fmin.reduce(car, 0), np.fmax.reduce(car, 0)  # NaN = no S25 pass covers the station: ours only
     lo_raw, hi_raw = np.fmin(ours, s_lo), np.fmax(ours, s_hi)
     lo = np.maximum(np.fmin(ours, s_lo + np.clip(-s_lo, 0, shrink)), -cap)
