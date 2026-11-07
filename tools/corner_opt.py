@@ -28,7 +28,7 @@ DATA = os.path.join(ROOT, "competition_code", "data")
 DT = 0.05
 KNOBS = ("thr", "brk", "grip")
 STEP0 = {"thr": 0.15, "brk": 0.08, "grip": 0.8}       # initial perturbation size
-BOUNDS = {"thr": (0.0, 1.0), "brk": (0.8, 1.4), "grip": (16.0, 31.0)}
+BOUNDS = {"thr": (0.0, 1.0), "brk": (0.8, 1.4), "grip": (16.0, 37.0)}  # c1329 races clean at 34.5 (2026-11-07)
 SLACK_SECTIONS = ()  # sections with no corner (straights) are detected from the profile and left alone
 
 

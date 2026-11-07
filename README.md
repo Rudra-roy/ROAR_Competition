@@ -1,6 +1,6 @@
 # ROAR Competition entry: slip-aware MPC with learned corrections (Monza)
 
-**Result:** 322.50 s median over 5 races (322.50 / 322.55 / 322.50 / 322.45 / 322.50), **0 collisions**,
+**Result:** 322.35 s median over 5 races (322.40 / 322.35 / 322.40 / 322.35 / 322.35), **0 collisions**,
 3 laps of Monza, CARLA 0.9.12, run with the unmodified `competition_runner.py` and `infrastructure.py`.
 
 Documentation for the competition itself: https://roar.gitbook.io/roar-competition-documentation/
@@ -14,7 +14,7 @@ where the Monza CARLA server already runs (e.g. Windows, as the organizers run i
 pip install -r requirements.txt          # numpy, scipy, osqp (Python 3.8)
 # start the Monza CARLA server, then:
 cd competition_code
-python competition_runner.py             # prints "Solution finished in 322.5... seconds"
+python competition_runner.py             # prints "Solution finished in 322.3... seconds"
 ```
 
 Runtime dependencies are numpy, scipy and osqp only (plus `roar_py_interface` from ROAR_PY). The submission reads
@@ -67,7 +67,7 @@ python -c "import carla, roar_py_interface, osqp, scipy; print('ok')"
 `requirements.txt` pins what the submission needs (numpy 1.24.4, scipy 1.10.1, osqp 1.1.3; osqp must be 1.x);
 carla 0.9.12 and gymnasium 0.28.1 come from ROAR_PY. For the development tools and tests (not needed to race):
 `uv pip install -r ROAR_Competition/requirements-dev.txt`, then `PYTHONPATH= python -m pytest tests/ -q` from the
-repo root (148 tests, about 5 minutes).
+repo root (150 tests, about 5 minutes).
 
 **5. One race, watching it.** Start the server outside the venv (Proton needs the system python >= 3.9), wait for
 port 2000, then run the race wrapper from the venv:
@@ -82,7 +82,7 @@ python tools/sim/race.py                                    # ROAR_HUD=1 adds a 
 
 `tools/sim/race.py` runs the unmodified `competition_runner.py`. It only raises the CARLA client timeout from 5 s to
 120 s (the first ticks under Proton are slower than 5 s). The sim runs in synchronous mode, so wall-clock speed does
-not change the score. Expected output: `Solution finished in 322.5... seconds` (322.45 to 322.55 s), and no
+not change the score. Expected output: `Solution finished in 322.3... seconds` (322.35 to 322.40 s), and no
 `major collision` line. Stop the server afterwards with
 `WINEPREFIX=~/tools/pfx/pfx ~/tools/GE-Proton9-27/files/bin/wineserver -k`.
 

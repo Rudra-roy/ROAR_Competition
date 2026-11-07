@@ -21,7 +21,7 @@ def test_knobs_round_trip_and_bounds():
     q = co.apply(p, X2)
     assert q["corner_throttle_floor"]["thr_sec"][3] == 1.0
     assert q["brake_sec_scale"][3] == 0.8
-    assert q["a_lat_sections"][3][1] == 31.0
+    assert q["a_lat_sections"][3][1] == co.BOUNDS["grip"][1]
     assert np.allclose(co.knobs_of(co.apply(p, X)), X)
 
 
