@@ -9,7 +9,7 @@ for that candidate; sections after an abort are unknown). The new combo becomes 
 clean as candidate 0 with a better total; otherwise the changed sections step back half way. Everything is logged to
 corner_opt/<name>/history.csv and state.json; the incumbent's data files are written to corner_opt/<name>/best/.
 
-  python tools/corner_opt.py <name> --slots 1,2,3 --batches 8 [--resume]
+  python tools/corner_opt.py <name> --slots 1,2,3 --batches 8 [--resume] [--body-ref "logs/ref/*.run.csv" --body-max 0.1]
 """
 import argparse
 import csv
@@ -96,8 +96,9 @@ def corner_mask(p):
     return vmin < 0.98 * p["v_max"]
 
 
-def run_batch(cands, slots, wts, name, batch):
-    """Race candidates in parallel slots (round-robin over slots); -> list of (label, result|None, status)."""
+def run_batch(cands, slots, wts, name, batch, body=None):
+    """Race candidates in parallel slots (round-robin over slots); -> list of (label, result|None, status).
+    body: a body_margin.BodyMargin; then each result gets a 5th element, the per-section body excess (m)."""
     results = [None] * len(cands)
     procs = {}
     queue = list(range(len(cands)))
@@ -118,6 +119,8 @@ def run_batch(cands, slots, wts, name, batch):
                 status = line[-1].split(",")[-1] if line else "crashed"
                 run_csv = os.path.join(wt, "logs", label + ".run.csv")
                 res = race_result(run_csv, cands[i]) if os.path.exists(run_csv) else None
+                if res is not None and body is not None:
+                    res = res + (body.excess(run_csv)[0],)
                 results[i] = (label, res, status)
                 del procs[i]
         time.sleep(3)
@@ -131,6 +134,9 @@ def main():
     ap.add_argument("--batches", type=int, default=8)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--params", help="starting vehicle_params.json (default: the repo's)")
+    ap.add_argument("--body-ref", help="glob of reference run.csv files: a section whose car body goes more than "
+                    "--body-max beyond their bodies counts as infeasible (tools/body_margin.py)")
+    ap.add_argument("--body-max", type=float, default=0.10)
     a = ap.parse_args()
     slots = [int(s) for s in a.slots.split(",")]
     wts = {s: os.path.join(PARENT, "slots", "wt%d" % s) for s in slots}
@@ -147,6 +153,11 @@ def main():
         X = knobs_of(p0)
         X_best, step, mom, best_t, batch0 = X.copy(), {k: [STEP0[k]] * len(X) for k in KNOBS}, np.zeros_like(X), None, 0
     active = corner_mask(p0)
+    body = None
+    if a.body_ref:
+        import glob
+        from body_margin import BodyMargin
+        body = BodyMargin(sorted(glob.glob(a.body_ref)))
     nsec, ncand = len(X), len(slots)
     rng = np.random.default_rng(batch0)
     hist = open(os.path.join(out, "history.csv"), "a", newline="")
@@ -166,7 +177,7 @@ def main():
             cands_X.append(Xc)
         cands = [apply(p0, Xc) for Xc in cands_X]
         t0 = time.time()
-        res = run_batch(cands, slots, wts, a.name, batch)
+        res = run_batch(cands, slots, wts, a.name, batch, body)
         print("batch %d: %.0f s" % (batch, time.time() - t0))
         # score
         T = np.full((ncand, nsec), np.nan)
@@ -176,13 +187,20 @@ def main():
                 hw.writerow([batch, i, label, status, "", "", json.dumps(cands_X[i].round(3).tolist()), ""])
                 print("  cand %d %s: %s (no result)" % (i, label, status))
                 continue
-            t_sec, coll, ok, t_total = r
+            t_sec, coll, ok, t_total = r[:4]
             clean[i] = ok
             valid = np.ones(nsec, bool)
             if coll >= 0:
                 order = (np.arange(nsec) - coll) % nsec
                 valid[order > 0] = False  # sections after the collision never ran
                 valid[coll] = False
+            if body is not None:
+                wide = r[4] > a.body_max
+                if wide.any():
+                    print("  cand %d: body beyond the reference in sections %s" % (i, np.flatnonzero(wide).tolist()))
+                valid &= ~wide
+                ok = ok and not wide.any()
+                clean[i] = ok
             T[i, valid] = t_sec[valid]
             hw.writerow([batch, i, label, status, t_total, coll, json.dumps(cands_X[i].round(3).tolist()), json.dumps(t_sec.round(2).tolist())])
             print("  cand %d %s: %s total %.2f coll_sec %d" % (i, label, status, t_total, coll))
