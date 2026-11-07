@@ -130,7 +130,7 @@ def run_batch(cands, slots, wts, name, batch, body=None):
                 run_csv = os.path.join(wt, "logs", label + ".run.csv")
                 res = race_result(run_csv, cands[i]) if os.path.exists(run_csv) else None
                 if res is not None and body is not None:
-                    res = res + (body.excess(run_csv)[0],)
+                    res = res + (body.excess(run_csv, os.path.join(wt, "competition_code", "data", "racing_line.npz"))[0],)
                 results[i] = (label, res, status)
                 del procs[i]
         time.sleep(3)

@@ -162,8 +162,8 @@ def test_widen_closed_and_no_kinks(widened):
 def test_shipped_line_is_the_tool_output(tmp_path):
     """competition_code/data/racing_line.npz is two tool steps away from the e115 line:
     1. tools/line_w5.npz == mincurv_line --widen tools/line_e115.npz --factors SHIP_FACTORS (the w5 line);
-    2. shipped == mincurv_line --widen tools/line_w5.npz --windows SHIP_EXIT_WINDOWS --exit-weight SHIP_EXIT_WEIGHT
-       --winner (the kink exit straightened, its stored spline kept)."""
+    2. shipped == SHIP_EXIT_STEPS applied in turn, each mincurv_line --widen <previous step's line> --windows A:APEX:B
+       --exit-weight W --winner (kink, sec8 and first-chicane exits straightened, the stored spline kept)."""
     import envelope
     for f in (envelope.S25_HUD, envelope.W26_HUD):
         if not os.path.exists(f):
@@ -176,11 +176,11 @@ def test_shipped_line_is_the_tool_output(tmp_path):
         w5 = str(tmp_path / "w5.npz")
         ml.main(w5, widen=np.load(envelope.LINE_8E)["xy"], factors=ml.SHIP_FACTORS)
         assert same(np.load(w5), np.load(os.path.join(ml.ROOT, "tools", "line_w5.npz")))
-        d = np.load(w5)
-        out = str(tmp_path / "s.npz")
-        wins = [(a, b) for a, _, b in ml.SHIP_EXIT_WINDOWS]
-        ml.main(out, widen=d["xy"], factors=[1.0] * len(wins), windows=wins, widen_tck=(d["tck_t"], list(d["tck_c"]), 3),
-                exit_w=ml.SHIP_EXIT_WEIGHT, apexes=[p for _, p, _ in ml.SHIP_EXIT_WINDOWS], winner=True)
+        out = w5
+        for k, ((a, p, b), w) in enumerate(ml.SHIP_EXIT_STEPS):
+            d, out = np.load(out), str(tmp_path / ("s%d.npz" % k))
+            ml.main(out, widen=d["xy"], factors=[1.0], windows=[(a, b)], widen_tck=(d["tck_t"], list(d["tck_c"]), 3),
+                    exit_w=[w], apexes=[p], winner=True)
     finally:
         ml.MAX_OFFSET, ml.ENV_SHRINK = saved
     assert same(np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz")))

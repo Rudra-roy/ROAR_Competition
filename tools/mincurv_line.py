@@ -63,7 +63,10 @@ SHIP_SHRINK, SHIP_MAX_OFFSET = 0.15, 4.6
 # then (2026-11-05) the kink's exit straightened: tools/line_w5.npz (the w5 line above) widened again over the kink
 # (window start : apex : end, line_s of w5) with the late-apex weight 4 and the winner's driven path in the envelope.
 # 322.95 -> 322.50 s. Weight 8 / 12 / 30: 322.60 / 322.90 / 323.85; the same at c1329 (1240:1330:1480) bought nothing.
-SHIP_EXIT_WINDOWS, SHIP_EXIT_WEIGHT = [(2600.0, 2705.0, 2950.0)], [4.0]
+# then (2026-11-08, q_v 128 MPC) the same, one corner per step, each step widening the previous step's line: sec8
+# (319.80 -> 319.60 s; weights 2 / 8: 319.60 / 319.65) and the first chicane (-> 319.55). Lesmo 1, the final corner
+# and c1329 at weight 4 were neutral.
+SHIP_EXIT_STEPS = [((2600.0, 2705.0, 2950.0), 4.0), ((3830.0, 3900.0, 4183.0), 4.0), ((880.0, 949.0, 1040.0), 4.0)]
 # every corner (c1329, the c2695/2812/2899 complex and c3993/c4113 added), for --full-width: bounds = the corridor
 # edges minus the car, per-window caps (--caps) that the race loop lowers 0.2 m at the corner that collided
 WINDOWS_ALL = [(780.0, 1060.0), (1250.0, 1420.0), (1600.0, 1780.0), (2540.0, 2960.0), (3720.0, 3860.0),
