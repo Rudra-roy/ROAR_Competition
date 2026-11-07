@@ -4,7 +4,7 @@ The car centre alone hides slides: at 20 deg of sideslip the nose and tail sweep
 sec2 grip of 41 m/s^2 hit the Lesmo-1 apex with its centre 0.46 m off the line, body 0.35-0.4 m beyond the shipped
 car's body; 37-39 m/s^2 raced clean with 0.33-0.41 m. Body = 4 corners of a HALF_L x HALF_W box around the centre,
 nose heading = line heading + e_psi (run.csv). Offsets are signed lateral distances from the centreline, binned per
-metre of centreline (+-2 m neighbours merged), reference = union over the reference races.
+0.5 m of centreline after 5x linear upsampling (+-0.5 m neighbours merged), reference = union over the reference races.
 
   python tools/body_margin.py "logs/ref/*.run.csv" RUN.run.csv [RUN ...]   -> per-section max metres beyond
 
@@ -26,12 +26,19 @@ from track import load_track  # noqa: E402
 
 DATA = os.path.join(ROOT, "competition_code", "data")
 HALF_L, HALF_W = 2.4, 1.05
-BIN = 1.0
+BIN = 0.5
+UPSAMPLE = 5  # linear interpolation between 20 Hz samples (2-3 m apart at speed) before binning
 SKIP_S = 300.0  # the standing start is identical for every config
 
 
 def corner_offsets(xy, yaw, centre):
     """-> (centreline station of the centre, min and max signed offset of the 4 body corners)."""
+    xy, yaw = np.asarray(xy, float), np.unwrap(np.asarray(yaw, float))
+    if UPSAMPLE > 1 and len(xy) > 1:
+        u = np.arange((len(xy) - 1) * UPSAMPLE + 1) / UPSAMPLE
+        i = np.arange(len(xy))
+        xy = np.c_[np.interp(u, i, xy[:, 0]), np.interp(u, i, xy[:, 1])]
+        yaw = np.interp(u, i, yaw)
     s0, _ = station(xy, centre)
     ds = []
     for a, b in ((HALF_L, HALF_W), (HALF_L, -HALF_W), (-HALF_L, HALF_W), (-HALF_L, -HALF_W)):
@@ -42,15 +49,23 @@ def corner_offsets(xy, yaw, centre):
 
 
 def run_body(run_csv, track, centre):
-    """(station, body min, body max, line_s) of a run.csv, reconstructed on its racing line."""
+    """(station, body min, body max, line_s) of a run.csv, reconstructed on its racing line. A HUD csv with x, y, yaw
+    columns (e.g. another entry's telemetry) is used as is; its line_s comes from projecting onto `track`."""
     d = np.genfromtxt(run_csv, delimiter=",", names=True)
+    if "yaw" in d.dtype.names and "x" in d.dtype.names:
+        xy = np.c_[d["x"], d["y"]]
+        r = corner_offsets(xy, d["yaw"], centre)
+        return r + (np.zeros(len(r[0])),)  # line_s unknown; only used as a reference
     m = d["s_total"] > SKIP_S
     s = d["line_s"][m] % track.length
     p = np.c_[np.interp(s, track.s, track.xy[:, 0], period=track.length),
               np.interp(s, track.s, track.xy[:, 1], period=track.length)]
     psi = np.interp(s, track.s, np.unwrap(track.psi), period=track.length)
     xy = p + d["e_y"][m][:, None] * np.c_[-np.sin(psi), np.cos(psi)]
-    return corner_offsets(xy, psi + d["e_psi"][m], centre) + (s,)
+    r = corner_offsets(xy, psi + d["e_psi"][m], centre)
+    su = np.unwrap(s * 2 * np.pi / track.length) * track.length / (2 * np.pi)
+    su = np.interp(np.arange(len(r[0])) / UPSAMPLE, np.arange(len(s)), su) % track.length
+    return r + (su,)
 
 
 class BodyMargin:
@@ -70,8 +85,8 @@ class BodyMargin:
             k = (s0 / BIN).astype(int) % self.nb
             np.minimum.at(lo, k, a)
             np.maximum.at(hi, k, b)
-        self.lo = minimum_filter1d(lo, 5, mode="wrap")
-        self.hi = maximum_filter1d(hi, 5, mode="wrap")
+        self.lo = minimum_filter1d(lo, 3, mode="wrap")
+        self.hi = maximum_filter1d(hi, 3, mode="wrap")
 
     def excess(self, run_csv, line=None):
         """-> (per-section max metres beyond the reference bodies (-inf where not driven), line_s of the worst tick)."""

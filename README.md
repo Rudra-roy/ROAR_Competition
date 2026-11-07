@@ -1,6 +1,6 @@
 # ROAR Competition entry: slip-aware MPC with learned corrections (Monza)
 
-**Result:** 322.15 s median over 5 races (322.05 / 322.10 / 322.15 / 322.15 / 322.15), **0 collisions**,
+**Result:** 319.85 s median over 5 races (319.75 / 319.85 / 319.85 / 319.80 / 319.85), **0 collisions**,
 3 laps of Monza, CARLA 0.9.12, run with the unmodified `competition_runner.py` and `infrastructure.py`.
 
 Documentation for the competition itself: https://roar.gitbook.io/roar-competition-documentation/
@@ -14,7 +14,7 @@ where the Monza CARLA server already runs (e.g. Windows, as the organizers run i
 pip install -r requirements.txt          # numpy, scipy, osqp (Python 3.8)
 # start the Monza CARLA server, then:
 cd competition_code
-python competition_runner.py             # prints "Solution finished in 322.1... seconds"
+python competition_runner.py             # prints "Solution finished in 319.8... seconds"
 ```
 
 Runtime dependencies are numpy, scipy and osqp only (plus `roar_py_interface` from ROAR_PY). The submission reads
@@ -67,7 +67,7 @@ python -c "import carla, roar_py_interface, osqp, scipy; print('ok')"
 `requirements.txt` pins what the submission needs (numpy 1.24.4, scipy 1.10.1, osqp 1.1.3; osqp must be 1.x);
 carla 0.9.12 and gymnasium 0.28.1 come from ROAR_PY. For the development tools and tests (not needed to race):
 `uv pip install -r ROAR_Competition/requirements-dev.txt`, then `PYTHONPATH= python -m pytest tests/ -q` from the
-repo root (152 tests, about 5 minutes).
+repo root (153 tests, about 5 minutes).
 
 **5. One race, watching it.** Start the server outside the venv (Proton needs the system python >= 3.9), wait for
 port 2000, then run the race wrapper from the venv:
@@ -82,7 +82,7 @@ python tools/sim/race.py                                    # ROAR_HUD=1 adds a 
 
 `tools/sim/race.py` runs the unmodified `competition_runner.py`. It only raises the CARLA client timeout from 5 s to
 120 s (the first ticks under Proton are slower than 5 s). The sim runs in synchronous mode, so wall-clock speed does
-not change the score. Expected output: `Solution finished in 322.1... seconds` (322.05 to 322.15 s), and no
+not change the score. Expected output: `Solution finished in 319.8... seconds` (319.75 to 319.85 s), and no
 `major collision` line. Stop the server afterwards with
 `WINEPREFIX=~/tools/pfx/pfx ~/tools/GE-Proton9-27/files/bin/wineserver -k`.
 
@@ -131,6 +131,8 @@ All in `competition_code/data/`, committed:
    3 s) on a dynamic bicycle model with saturating tyres and braking load transfer, fitted to race logs
    (`tools/fit_tyres.py`). It tracks the line's course rather than the car's nose, limits tyre slip angles, and
    shrinks its braking limit as cornering load rises, so it brakes in a straight line and turns while easing off.
+   Its speed weight (`mpc.q_v` = 128) makes it hold the planned speed through corners: with the earlier weight of 2
+   it traded speed for line accuracy and ran 3-9 m/s below the plan in every corner (2.3 s per race).
    `competition_code/mpc.py` is the earlier kinematic MPC, kept as an alternative (`mpc.model`).
 4. **Learned line offset** (`tools/ilc.py`). Iterative learning over repeated laps: the car's measured lateral error
    at each metre of the lap is fed back into the reference, so the driven path lands on the intended line.

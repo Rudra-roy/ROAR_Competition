@@ -39,6 +39,21 @@ def test_race_result_on_logged_runs():
     assert ab is not None and not ab[2] and ab[1] == 8  # spun at c3835 = section 8
 
 
+def test_race_result_stopped_at_first_collision(tmp_path):
+    """eval_slot.sh stops a race at its first collision, before any respawn: the log ends early, no s_total jump."""
+    import pytest
+    src = os.path.join(ROOT, "logs", "gate_t_1.run.csv")
+    if not os.path.exists(src):
+        pytest.skip("race logs not present (logs/ not in git)")
+    p = params()
+    d = np.genfromtxt(src, delimiter=",", names=True)
+    cut = int(np.argmax(d["s_total"] > 5587 * 2 + 300))  # lap 3, line_s ~ 300-ish
+    f = tmp_path / "stopped.run.csv"
+    np.savetxt(f, d[:cut], delimiter=",", header=",".join(d.dtype.names), comments="", fmt="%.6g")
+    t_sec, coll, ok, total = co.race_result(str(f), p)
+    assert not ok and coll == int(co.sec_index(co.sections(p), d["line_s"][cut - 1]))
+
+
 def test_corner_mask_marks_corner_sections_only():
     m = co.corner_mask(params())
     assert m[0] and m[10] and m[7]  # chicane, hairpin, bottom-curve entry

@@ -52,7 +52,17 @@ def race_result(run_csv, p):
     nsec = len(starts)
     t_sec = np.bincount(idx, minlength=nsec) * DT
     coll = int(idx[jumps[0]]) if len(jumps) else -1
-    return t_sec, coll, len(jumps) == 0, float(len(d) * DT)
+    if coll < 0 and d["s_total"][-1] < LAPS_M(p) - 50:
+        # eval_slot.sh / race_guard.sh stop the race at the first collision, before any respawn: the log just ends
+        coll = int(idx[-1])
+    return t_sec, coll, coll < 0, float(len(d) * DT)
+
+
+def LAPS_M(p):
+    """Race distance (3 laps of the racing line), m."""
+    sys.path.insert(0, os.path.join(ROOT, "competition_code"))
+    from track import load_track
+    return 3 * load_track(os.path.join(DATA, "racing_line.npz")).length
 
 
 def write_candidate(wt, p):
@@ -216,7 +226,7 @@ def main():
             else:
                 print("  incumbent validated: %.2f (best stays %.2f)" % (r0[3], best_t))
         elif r0 is not None:
-            print("  incumbent COLLIDED in section %d: stepping its changed sections back half way" % r0[1])
+            print("  incumbent %s: stepping its changed sections back half way" % ("COLLIDED in section %d" % r0[1] if r0[1] >= 0 else "body too wide"))
             X = 0.5 * (X + X_best)
         # per-section selection among candidates with a valid, clean-in-section time
         X_new = X.copy()
