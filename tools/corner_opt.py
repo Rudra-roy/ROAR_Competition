@@ -9,7 +9,7 @@ for that candidate; sections after an abort are unknown). The new combo becomes 
 clean as candidate 0 with a better total; otherwise the changed sections step back half way. Everything is logged to
 corner_opt/<name>/history.csv and state.json; the incumbent's data files are written to corner_opt/<name>/best/.
 
-  python tools/corner_opt.py <name> --slots 1,2,3 --batches 8 [--resume] [--body-ref "logs/ref/*.run.csv" --body-max 0.1]
+  python tools/corner_opt.py <name> --slots 1,2,3 --batches 8 [--resume] [--body-ref "logs/ref/*.run.csv" --body-max 0.1] [--freeze 7]
 """
 import argparse
 import csv
@@ -147,6 +147,7 @@ def main():
     ap.add_argument("--body-ref", help="glob of reference run.csv files: a section whose car body goes more than "
                     "--body-max beyond their bodies counts as infeasible (tools/body_margin.py)")
     ap.add_argument("--body-max", type=float, default=0.10)
+    ap.add_argument("--freeze", default="", help="comma list of sections never perturbed (e.g. 7: its grip pushes sec8 wide)")
     a = ap.parse_args()
     slots = [int(s) for s in a.slots.split(",")]
     wts = {s: os.path.join(PARENT, "slots", "wt%d" % s) for s in slots}
@@ -163,6 +164,8 @@ def main():
         X = knobs_of(p0)
         X_best, step, mom, best_t, batch0 = X.copy(), {k: [STEP0[k]] * len(X) for k in KNOBS}, np.zeros_like(X), None, 0
     active = corner_mask(p0)
+    for k in filter(None, a.freeze.split(",")):
+        active[int(k)] = False
     body = None
     if a.body_ref:
         import glob
