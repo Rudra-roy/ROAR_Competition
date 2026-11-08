@@ -37,7 +37,7 @@ import transforms3d as tr3d
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "competition_code"), os.path.join(ROOT, "tools")]
 from export_line import offsets  # noqa: E402
-from track import Track, fit_spline  # noqa: E402
+from track import Track, fit_spline, load_track  # noqa: E402
 from scipy.ndimage import gaussian_filter1d  # noqa: E402
 
 WP = os.path.join(os.path.dirname(ROOT), "ROAR_PY", "roar_py_carla", "roar_py_carla", "assets", "waypoints", "Monza.npz")
@@ -240,8 +240,47 @@ def patch_spline(tck, u, target, free, knot_ds_u):
     return t, c, k
 
 
+def corridor_bounds(map_path, ref_runs, line_path, safety=0.3, spread=10.0):
+    """Car-centre band from the ray-cast wall map (tools/map_corridor.py): (station, lo, hi), centreline offsets.
+    hi = left wall - body reach to the left - safety, lo = -(right wall - body reach to the right - safety). Body reach
+    per station = the widest body-edge-to-car-centre distance the reference races showed there (their slides
+    included; tools/body_margin.py corners), max-filtered over +-spread m; HALF_W where no race passed."""
+    import glob
+    from scipy.ndimage import maximum_filter1d
+    import body_margin as bm
+    from envelope import station as cstation
+    z = np.load(map_path)
+    st = z["station"]
+    n = len(st)
+    centre = np.load(os.path.join(DATA, "centreline.npy"))
+    tr = load_track(line_path)
+    ext_l, ext_r = np.full(n, HALF_W), np.full(n, HALF_W)
+    up = bm.UPSAMPLE
+    bm.UPSAMPLE = 1
+    try:
+        for f in sorted(glob.glob(ref_runs)):
+            d = np.genfromtxt(f, delimiter=",", names=True)
+            m = d["s_total"] > bm.SKIP_S
+            s = d["line_s"][m] % tr.length
+            p = np.c_[np.interp(s, tr.s, tr.xy[:, 0], period=tr.length), np.interp(s, tr.s, tr.xy[:, 1], period=tr.length)]
+            psi = np.interp(s, tr.s, np.unwrap(tr.psi), period=tr.length)
+            xy = p + d["e_y"][m][:, None] * np.c_[-np.sin(psi), np.cos(psi)]
+            s0, lo, hi = bm.corner_offsets(xy, psi + d["e_psi"][m], centre)
+            _, dcar = cstation(xy, centre)
+            k = np.round(s0 / (st[1] - st[0])).astype(int) % n
+            np.maximum.at(ext_l, k, hi - dcar)
+            np.maximum.at(ext_r, k, dcar - lo)
+    finally:
+        bm.UPSAMPLE = up
+    w = max(1, int(round(2 * spread / (st[1] - st[0]))) | 1)
+    ext_l, ext_r = maximum_filter1d(ext_l, w, mode="wrap"), maximum_filter1d(ext_r, w, mode="wrap")
+    left = np.where(np.isfinite(z["left"]), z["left"], 9.0)
+    right = np.where(np.isfinite(z["right"]), z["right"], 9.0)
+    return st, -(right - ext_r - safety), left - ext_l - safety
+
+
 def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS, full_width=False,
-                  caps=None, tck=None, exit_w=None, apexes=None, traces=None):
+                  caps=None, tck=None, exit_w=None, apexes=None, traces=None, corridor=None):
     """-> (points, tck). The QP runs on the old line as the car follows it (its own smoothing spline sampled at each
     point's parameter, not the noisy points): min-curvature offsets along its normals, free only in the WINDOWS
     (cosine blended), within the proven envelope; window j's shift scaled by factors[j]. The spline is the old fit
@@ -266,7 +305,11 @@ def widen_corners(old_xy, centre, s25_xy, factors=(1.0, 1.0, 1.0, 1.0), windows=
     w, kw = window_weight(ls, tr.length, wins)
     Lc = np.linalg.norm(np.roll(centre, -1, 0) - centre, axis=1).sum()
     sc, dc = station(base, centre)
-    if full_width:  # the road itself: edges minus the car (+ YAW_ALLOW), then the per-window caps
+    if corridor is not None:  # the ray-cast wall map minus the body reach and a safety gap (corridor_bounds)
+        cst, clo, chi = corridor
+        lo, hi = np.interp(sc, cst, clo, period=Lc), np.interp(sc, cst, chi, period=Lc)
+        cap = np.full(len(ls), 9.0)
+    elif full_width:  # the road itself: edges minus the car (+ YAW_ALLOW), then the per-window caps
         left, right, _ = edges_from_waypoints()
         margin = HALF_W + YAW_ALLOW
         lo = -(np.abs(signed_offset(base, right)) - margin)
@@ -307,7 +350,7 @@ def remap_sections(old_xy, new_xy, sections):
 
 
 def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.0, 1.0), windows=WINDOWS,
-         full_width=False, caps=None, widen_tck=None, exit_w=None, apexes=None, winner=False):
+         full_width=False, caps=None, widen_tck=None, exit_w=None, apexes=None, winner=False, corridor=None):
     centre = np.load(os.path.join(DATA, "centreline.npy"), allow_pickle=False)
     tck = None
     dmax_of = lambda xy: max(np.abs(offsets(xy, centre)[0]).max(),  # noqa: E731
@@ -315,7 +358,7 @@ def main(out, remap_from=None, straights=None, widen=None, factors=(1.0, 1.0, 1.
     if widen is not None:
         from envelope import S25_HUD, W26_HUD, load_xy
         xy, tck = widen_corners(widen, centre, load_xy(S25_HUD), factors, windows, full_width, caps, widen_tck, exit_w,
-                                apexes, [load_xy(W26_HUD)] if winner else None)
+                                apexes, [load_xy(W26_HUD)] if winner else None, corridor)
         mode = "widen %s%s" % (",".join("%g" % f for f in factors), " full-width caps %s" % caps if full_width else "")
         dmax = dmax_of(xy)
     elif straights is not None:  # no slack in this mode: the bounds come from the raced line
@@ -363,6 +406,10 @@ if __name__ == "__main__":
     ap.add_argument("--windows", help="custom corner windows, line_s of the --widen line: A:B or A:APEX:B, comma-sep")
     ap.add_argument("--winner", action="store_true", help="add the Summer 2026 winner's driven path to the envelope")
     ap.add_argument("--exit-weight", help="per-window late-apex weight (exit_ramp), e.g. 0,4")
+    ap.add_argument("--corridor", metavar="MAP.npz", help="bounds from the ray-cast wall map (tools/map_corridor.py)"
+                    " instead of the driven envelope")
+    ap.add_argument("--corridor-ref", default="logs/ref_ship/*.run.csv", help="races giving the body reach per station")
+    ap.add_argument("--corridor-safety", type=float, default=0.3)
     a = ap.parse_args()
     MAX_OFFSET, ENV_SHRINK = a.max_offset, a.shrink
     wins = WINDOWS_ALL if a.all_corners else WINDOWS
@@ -378,4 +425,5 @@ if __name__ == "__main__":
     wtck = (wd["tck_t"], list(wd["tck_c"]), 3) if wd is not None and "tck_t" in wd else None  # keep a patched spline
     ew = [float(x) for x in a.exit_weight.split(",")] if a.exit_weight else None
     main(a.out, a.remap_from, a.straights and np.load(a.straights)["xy"], wd["xy"] if wd is not None else None,
-         facs, wins, a.full_width, caps, wtck, ew, apx if a.windows else None, a.winner)
+         facs, wins, a.full_width, caps, wtck, ew, apx if a.windows else None, a.winner,
+         corridor_bounds(a.corridor, a.corridor_ref, a.widen, a.corridor_safety) if a.corridor else None)

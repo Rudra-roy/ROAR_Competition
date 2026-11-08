@@ -147,6 +147,9 @@ def main():
     ap.add_argument("--body-ref", help="glob of reference run.csv files: a section whose car body goes more than "
                     "--body-max beyond their bodies counts as infeasible (tools/body_margin.py)")
     ap.add_argument("--body-max", type=float, default=0.10)
+    ap.add_argument("--walls", help="ray-cast wall map (tools/map_corridor.py): a section whose car body comes within "
+                    "--wall-min of a wall counts as infeasible (instead of --body-ref)")
+    ap.add_argument("--wall-min", type=float, default=0.10)
     ap.add_argument("--freeze", default="", help="comma list of sections never perturbed (e.g. 7: its grip pushes sec8 wide)")
     a = ap.parse_args()
     slots = [int(s) for s in a.slots.split(",")]
@@ -167,7 +170,10 @@ def main():
     for k in filter(None, a.freeze.split(",")):
         active[int(k)] = False
     body = None
-    if a.body_ref:
+    if a.walls:
+        from body_margin import WallMargin
+        body, a.body_max = WallMargin(a.walls, a.wall_min), 0.0
+    elif a.body_ref:
         import glob
         from body_margin import BodyMargin
         body = BodyMargin(sorted(glob.glob(a.body_ref)))

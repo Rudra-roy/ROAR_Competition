@@ -80,11 +80,12 @@ def main(argv=None):
     ap.add_argument("--sigma", type=float, default=8.0)
     ap.add_argument("--cap", type=float, default=2.5)
     ap.add_argument("--target-cap", type=float, default=TARGET_CAP)
-    ap.add_argument("--only", metavar="A:B", help="update only line_s A..B (see module doc)")
+    ap.add_argument("--only", metavar="A:B", help="update only line_s A..B, comma list allowed (see module doc)")
+    ap.add_argument("--line", default=LINE, help="the racing line the runs drove (default: the shipped one)")
     ap.add_argument("--pull", action="append", default=[], metavar="A:B:M",
                     help="extra target: move M m toward the centreline over line_s A..B (cosine-blended 30 m)")
     a = ap.parse_args(argv)
-    tr = load_track(LINE)
+    tr = load_track(a.line)
     prev = np.zeros(len(tr.s))
     if a.prev:
         f = np.load(a.prev)
@@ -101,8 +102,11 @@ def main(argv=None):
     err = np.mean([lap_error(r, tr.s, tr.length) for r in a.runs], axis=0) - t
     d = update(prev, err, tr.ds, a.gamma, a.sigma, a.cap)
     if a.only:
-        s0, s1 = (float(x) for x in a.only.split(":"))
-        d = prev + window(tr.s, s0, s1) * (d - prev)
+        w = np.zeros(len(tr.s))
+        for ab in a.only.split(","):
+            s0, s1 = (float(x) for x in ab.split(":"))
+            w = np.maximum(w, window(tr.s, s0, s1))
+        d = prev + w * (d - prev)
     d2 = (np.roll(d, -1) - 2 * d + np.roll(d, 1)) / tr.ds ** 2
     np.savez(a.out, s=tr.s, d=d)
     print("e_y in: rms %.3f p95 %.3f max %.3f m | d out: max|d| %.2f m, max|d''| %.4f 1/m (line max|kappa| %.4f)"

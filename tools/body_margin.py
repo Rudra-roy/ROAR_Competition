@@ -112,3 +112,31 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+
+
+class WallMargin:
+    """Like BodyMargin, but against the ray-cast wall map (tools/map_corridor.py): excess = wall_min - (body-to-wall
+    clearance), per tuning section; > 0 means the body came within wall_min of a wall. The shipped car's closest
+    approach was 0.11-0.18 m, the runs that crashed 0.01-0.05 m."""
+
+    def __init__(self, map_path, wall_min=0.10, params=os.path.join(DATA, "vehicle_params.json"),
+                 centre=os.path.join(DATA, "centreline.npy"), line=os.path.join(DATA, "racing_line.npz")):
+        z = np.load(map_path)
+        self.st, self.wall_min = z["station"], wall_min
+        self.left = np.where(np.isfinite(z["left"]), z["left"], 9.0)
+        self.right = np.where(np.isfinite(z["right"]), z["right"], 9.0)
+        self.centre = np.load(centre)
+        self.track = load_track(line)
+        self.starts = np.array([s for s, _ in json.load(open(params))["a_lat_sections"]])
+
+    def excess(self, run_csv, line=None):
+        tr = self.track if line is None else load_track(line)
+        s0, a, b, ls = run_body(run_csv, tr, self.centre)
+        k = np.round(s0 / (self.st[1] - self.st[0])).astype(int) % len(self.st)
+        out = self.wall_min - np.minimum(self.left[k] - b, self.right[k] + a)
+        n = len(self.starts)
+        i = np.searchsorted(self.starts, ls, side="right") - 1
+        i = np.where(i < 0, n - 1, i)
+        per = np.full(n, -np.inf)
+        np.maximum.at(per, i, out)
+        return per, float(ls[np.argmax(out)])
