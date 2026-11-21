@@ -160,7 +160,7 @@ def test_widen_closed_and_no_kinks(widened):
 
 
 def test_shipped_line_is_the_tool_output(tmp_path):
-    """competition_code/data/racing_line.npz is two tool steps away from the e115 line:
+    """tools/line_ship319.npz (the 319.15 s line) is two tool steps away from the e115 line:
     1. tools/line_w5.npz == mincurv_line --widen tools/line_e115.npz --factors SHIP_FACTORS (the w5 line);
     2. shipped == SHIP_EXIT_STEPS applied in turn, each mincurv_line --widen <previous step's line> --windows A:APEX:B
        --exit-weight W --winner (kink, sec8 and first-chicane exits straightened, the stored spline kept)."""
@@ -183,7 +183,35 @@ def test_shipped_line_is_the_tool_output(tmp_path):
                     exit_w=[w], apexes=[p], winner=True)
     finally:
         ml.MAX_OFFSET, ml.ENV_SHRINK = saved
-    assert same(np.load(out), np.load(os.path.join(os.path.dirname(CENTRE), "racing_line.npz")))
+    assert same(np.load(out), np.load(os.path.join(ml.ROOT, "tools", "line_ship319.npz")))  # the 319.15 s line
+
+
+def test_corridor_line_is_the_tool_output(tmp_path):
+    """competition_code/data/racing_line.npz == tools/line_ship319.npz widened inside the measured walls
+    (tools/corridor_map.npz incl. its stored body reach) at Lesmo 1, then the final hairpin: within 0.02 m (the raced
+    line's second step took its reach from step one's line, so not bit for bit)."""
+    import envelope
+    for f in (envelope.S25_HUD,):
+        if not os.path.exists(f):
+            pytest.skip("%s not found" % f)
+    from track import load_track
+    ml = mincurv_line
+    corridor = os.path.join(ml.ROOT, "tools", "corridor_map.npz")
+    assert "reach_left" in np.load(corridor).files
+    saved = ml.MAX_OFFSET
+    ml.MAX_OFFSET = ml.SHIP_CORRIDOR_MAX_OFFSET
+    try:
+        cur = os.path.join(ml.ROOT, "tools", "line_ship319.npz")
+        for k, win in enumerate(ml.SHIP_CORRIDOR_WINDOWS):
+            d, out = np.load(cur), str(tmp_path / ("c%d.npz" % k))
+            ml.main(out, widen=d["xy"], factors=[1.0], windows=[win], widen_tck=(d["tck_t"], list(d["tck_c"]), 3),
+                    corridor=ml.corridor_bounds(corridor, None, cur, ml.SHIP_CORRIDOR_SAFETY))
+            cur = out
+    finally:
+        ml.MAX_OFFSET = saved
+    a, b = load_track(cur), load_track(os.path.join(os.path.dirname(CENTRE), "racing_line.npz"))
+    dev = max(abs(b.project(p)[2]) for p in a.xy[::3])
+    assert dev < 0.02 and abs(a.length - b.length) < 0.02
 
 
 def test_exit_ramp_weights_rise_from_apex_to_exit():

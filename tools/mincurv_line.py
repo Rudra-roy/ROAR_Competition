@@ -67,6 +67,15 @@ SHIP_SHRINK, SHIP_MAX_OFFSET = 0.15, 4.6
 # (319.80 -> 319.60 s; weights 2 / 8: 319.60 / 319.65) and the first chicane (-> 319.55). Lesmo 1, the final corner
 # and c1329 at weight 4 were neutral.
 SHIP_EXIT_STEPS = [((2600.0, 2705.0, 2950.0), 4.0), ((3830.0, 3900.0, 4183.0), 4.0), ((880.0, 949.0, 1040.0), 4.0)]
+# then (2026-11-21, corridor-map) tools/line_ship319.npz (= the 319.15 s line above, kept for this step) widened inside the
+# MEASURED walls (tools/corridor_map.npz: ray casts corrected with collision probes, body reach stored in it) at Lesmo 1 and
+# the final hairpin: --corridor --corridor-safety 0.7 --max-offset 9, one window per step. Not reshaped on purpose:
+# c1329 (crashes at its apex every time), sec8 / kink / chicane (slower). The line offset was re-learned in the two
+# windows and bumped by hand (+0.20 m at line_s 965:995, -0.10 m at 5438:5456, -0.25 m at 2672:2722: away from the three
+# inside obstacles); that offset is data, committed with the line. Rebuilding from the stored reach matches the raced line
+# to 0.012 m (the original second step took its body reach from the line of step one).
+SHIP_CORRIDOR_WINDOWS = [(1600.0, 1780.0), (5240.0, 5500.0)]
+SHIP_CORRIDOR_SAFETY, SHIP_CORRIDOR_MAX_OFFSET = 0.7, 9.0
 # every corner (c1329, the c2695/2812/2899 complex and c3993/c4113 added), for --full-width: bounds = the corridor
 # edges minus the car, per-window caps (--caps) that the race loop lowers 0.2 m at the corner that collided
 WINDOWS_ALL = [(780.0, 1060.0), (1250.0, 1420.0), (1600.0, 1780.0), (2540.0, 2960.0), (3720.0, 3860.0),
@@ -240,17 +249,15 @@ def patch_spline(tck, u, target, free, knot_ds_u):
     return t, c, k
 
 
-def corridor_bounds(map_path, ref_runs, line_path, safety=0.3, spread=10.0):
-    """Car-centre band from the ray-cast wall map (tools/map_corridor.py): (station, lo, hi), centreline offsets.
-    hi = left wall - body reach to the left - safety, lo = -(right wall - body reach to the right - safety). Body reach
-    per station = the widest body-edge-to-car-centre distance the reference races showed there (their slides
-    included; tools/body_margin.py corners), max-filtered over +-spread m; HALF_W where no race passed."""
+def body_reach(map_path, ref_runs, line_path, spread=10.0):
+    """(reach_left, reach_right) per map station: the widest body-edge-to-car-centre distance the reference races
+    showed (slides included), max-filtered over +-spread m; HALF_W where no race passed. Stored into the map by
+    store_reach so lines rebuild from committed files (the races are git-ignored logs)."""
     import glob
     from scipy.ndimage import maximum_filter1d
     import body_margin as bm
     from envelope import station as cstation
-    z = np.load(map_path)
-    st = z["station"]
+    st = np.load(map_path)["station"]
     n = len(st)
     centre = np.load(os.path.join(DATA, "centreline.npy"))
     tr = load_track(line_path)
@@ -273,7 +280,26 @@ def corridor_bounds(map_path, ref_runs, line_path, safety=0.3, spread=10.0):
     finally:
         bm.UPSAMPLE = up
     w = max(1, int(round(2 * spread / (st[1] - st[0]))) | 1)
-    ext_l, ext_r = maximum_filter1d(ext_l, w, mode="wrap"), maximum_filter1d(ext_r, w, mode="wrap")
+    return maximum_filter1d(ext_l, w, mode="wrap"), maximum_filter1d(ext_r, w, mode="wrap")
+
+
+def store_reach(map_path, ref_runs, line_path, spread=10.0):
+    """Write reach_left / reach_right into the wall map (python tools/mincurv_line.py --store-reach ...)."""
+    z = dict(np.load(map_path))
+    z["reach_left"], z["reach_right"] = body_reach(map_path, ref_runs, line_path, spread)
+    np.savez(map_path, **z)
+
+
+def corridor_bounds(map_path, ref_runs, line_path, safety=0.3, spread=10.0):
+    """Car-centre band from the ray-cast wall map (tools/map_corridor.py): (station, lo, hi), centreline offsets.
+    hi = left wall - body reach to the left - safety, lo = -(right wall - body reach to the right - safety). The body
+    reach is the one stored in the map (store_reach) when it has one, else computed from ref_runs (body_reach)."""
+    z = np.load(map_path)
+    st = z["station"]
+    if "reach_left" in z.files:
+        ext_l, ext_r = z["reach_left"], z["reach_right"]
+    else:
+        ext_l, ext_r = body_reach(map_path, ref_runs, line_path, spread)
     left = np.where(np.isfinite(z["left"]), z["left"], 9.0)
     right = np.where(np.isfinite(z["right"]), z["right"], 9.0)
     return st, -(right - ext_r - safety), left - ext_l - safety
@@ -410,7 +436,11 @@ if __name__ == "__main__":
                     " instead of the driven envelope")
     ap.add_argument("--corridor-ref", default="logs/ref_ship/*.run.csv", help="races giving the body reach per station")
     ap.add_argument("--corridor-safety", type=float, default=0.3)
+    ap.add_argument("--store-reach", action="store_true", help="write the body reach of --corridor-ref into the map, then exit")
     a = ap.parse_args()
+    if a.store_reach:
+        store_reach(a.corridor, a.corridor_ref, a.widen)
+        sys.exit("stored reach_left/reach_right in %s" % a.corridor)
     MAX_OFFSET, ENV_SHRINK = a.max_offset, a.shrink
     wins = WINDOWS_ALL if a.all_corners else WINDOWS
     if a.windows:
