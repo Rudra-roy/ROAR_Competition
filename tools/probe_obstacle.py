@@ -67,7 +67,7 @@ def poses(run_csv, track, a, b, lap):
     return s, xy, nrm, psi + d["e_psi"][m], kap
 
 
-async def probe(port, s, xy, nrm, yaw, kap, shifts, thresh=1.0, z_up=0.3):
+async def probe(port, s, xy, nrm, yaw, kap, shifts, thresh=1.0, z_up=0.3, side=1.0):
     client = carla.Client("127.0.0.1", port)
     client.set_timeout(120.0)
     inst = roar_py_carla.RoarPyCarlaInstance(client)
@@ -82,7 +82,7 @@ async def probe(port, s, xy, nrm, yaw, kap, shifts, thresh=1.0, z_up=0.3):
         await w.step()
     out = []
     for i in range(len(s)):
-        inward = np.sign(kap[i]) * nrm[i] if kap[i] != 0 else nrm[i]
+        inward = side * (np.sign(kap[i]) * nrm[i] if kap[i] != 0 else nrm[i])  # side = -1: toward the OUTSIDE
         z0 = wz[int(np.argmin(np.linalg.norm(wz[:, :2] - xy[i], axis=1))), 2]
         hit, imp = np.inf, 0.0
         for d in shifts:
@@ -124,6 +124,7 @@ def main(argv=None):
     ap.add_argument("--lap", type=int, default=2)
     ap.add_argument("--line", default=os.path.join(DATA, "racing_line.npz"))
     ap.add_argument("--out", default="probe.csv")
+    ap.add_argument("--outward", action="store_true", help="shift toward the OUTSIDE of the corner (the outer wall); body_in* then hold the outer body edge, so tools/correct_corridor.py maps them to the outer wall")
     ap.add_argument("--z", type=float, default=0.3, help="placement height above the road, m: high enough that "
                     "low kerbs do not touch in the two ticks before the car lands, so only tall geometry counts")
     a = ap.parse_args(argv)
@@ -135,7 +136,7 @@ def main(argv=None):
     log = open(os.path.splitext(a.out)[0] + ".server.log", "w")
     srv = start_server(port, log)
     try:
-        res = asyncio.run(probe(port, s, xy, nrm, yaw, kap, shifts, z_up=a.z))
+        res = asyncio.run(probe(port, s, xy, nrm, yaw, kap, shifts, z_up=a.z, side=-1.0 if a.outward else 1.0))
     finally:
         os.killpg(srv.pid, 9)
         for p in subprocess.run(["pgrep", "-f", "carla-rpc-port=%d" % port], capture_output=True, text=True).stdout.split():
@@ -143,12 +144,12 @@ def main(argv=None):
     centre = np.load(os.path.join(DATA, "centreline.npy"))
     body_margin.UPSAMPLE = 1  # one offset per pose
     st, b_lo, b_hi = corner_offsets(xy, yaw, centre)
-    inward_sign = np.sign(kap)  # + : the inside is to the left (+ offset)
+    inward_sign = np.sign(kap) * (-1.0 if a.outward else 1.0)  # + : the probed side is to the left (+ offset)
     rows = []
     for i, (d, imp) in enumerate(res):
         edge = b_lo[i] if inward_sign[i] < 0 else b_hi[i]
         if np.isfinite(d):
-            q = xy[i] + d * np.sign(kap[i]) * nrm[i]
+            q = xy[i] + d * (-1.0 if a.outward else 1.0) * np.sign(kap[i]) * nrm[i]
             st2, lo2, hi2 = corner_offsets(q[None], np.array([yaw[i]]), centre)
             edge_t = lo2[0] if inward_sign[i] < 0 else hi2[0]
         else:

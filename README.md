@@ -1,7 +1,11 @@
 # ROAR Competition entry: slip-aware MPC with learned corrections (Monza)
 
 **Result:** 318.40 s median over 20 races (318.30 to 318.40 s), **0 collisions**, the car body never closer than 0.13 m to a
-measured wall (`tools/gate.py`, 4 of the 20 with the server window open),
+wall on the wall map (`tools/gate.py`, 4 of the 20 with the server window open). The map is ray-cast, with collision-probe
+edges at the inside of Lesmo 1, the final hairpin, c1329, the first-chicane exit and the kink; the car's own poses were
+then probed (static, collision mesh): closest touch 0.18 m (hairpin apex), 0.26 m at Lesmo 1, c1329 and the chicane exit,
+0.40 m at the kink, none within 0.6 m at sec8; outside walls 0.60 m (Lesmo 1) and 0.75 m (hairpin). Elsewhere the walls are
+ray-cast only. Cars that crashed in our tests touched at 0.0-0.1 m. One machine only: results elsewhere are untested,
 3 laps of Monza, CARLA 0.9.12, run with the unmodified `competition_runner.py` and `infrastructure.py`.
 
 Documentation for the competition itself: https://roar.gitbook.io/roar-competition-documentation/
