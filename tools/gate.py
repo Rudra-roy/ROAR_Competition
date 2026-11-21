@@ -4,7 +4,8 @@
 
 Why it exists: the earlier gates were five races from scratch scripts, and a gate once raced the wrong files. Here
   * the repo's competition_code/ must be clean and committed; every slot worktree (../slots/wtK) is checked out at
-    that exact commit (detached) and its data files are compared with the repo's, byte for byte, before any race;
+    that exact commit (detached) and every tracked file of competition_code/ is compared with the repo's, byte for
+    byte, before any race;
   * every race uses the unmodified runner through tools/eval_slot.sh (which stops at the first collision);
   * each finished race is scored against the wall map (tools/body_margin.WallMargin on the committed line): the
     closest the car body came to a wall, and where;
@@ -52,17 +53,17 @@ def prepare_slots(slots):
     if dirty:
         sys.exit("competition_code/ has uncommitted changes: commit the setup first, the gate races a commit\n" + dirty)
     sha = sha_of(ROOT)
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "competition_code"], capture_output=True,
+                             text=True).stdout.split()
     for s in slots:
         wt = os.path.join(PARENT, "slots", "wt%d" % s)
         subprocess.run(["git", "-C", wt, "checkout", "-q", "-f", "--detach", sha], check=True)
         if sha_of(wt) != sha:
             sys.exit("slot %d is not at %s" % (s, sha[:8]))
-        for dp, _, files in os.walk(os.path.join(ROOT, DATA)):
-            for f in files:
-                a = os.path.join(dp, f)
-                b = os.path.join(wt, os.path.relpath(a, ROOT))
-                if not os.path.exists(b) or not filecmp.cmp(a, b, shallow=False):
-                    sys.exit("slot %d: %s differs from the repo's" % (s, os.path.relpath(a, ROOT)))
+        for rel in tracked:  # every file of the commit's competition_code/ (untracked training leftovers don't race)
+            a, b = os.path.join(ROOT, rel), os.path.join(wt, rel)
+            if not os.path.exists(b) or not filecmp.cmp(a, b, shallow=False):
+                sys.exit("slot %d: %s differs from the repo's" % (s, rel))
     return sha
 
 
