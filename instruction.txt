@@ -1,0 +1,17 @@
+ROAR Fall 2026 (Monza) entry: slip-aware MPC with a TOPP-RA speed profile and learned corrections.
+
+Branch: main (the fork's default branch). Run it as the starter code: competition_code/competition_runner.py and
+competition_code/infrastructure.py are unmodified; the submission is competition_code/submission.py.
+
+Extra packages (Python 3.8, as for carla 0.9.12):
+    pip install -r requirements.txt        # numpy==1.24.4, scipy==1.10.1, osqp==1.1.3
+roar_py_interface and the carla client come from the competition's ROAR_PY install, as usual.
+
+Run (Monza CARLA server already running):
+    cd competition_code
+    python competition_runner.py
+
+Everything the controller needs is committed in competition_code/data/. Nothing is trained or generated at run time,
+and the code never teleports, steps the world, or reads anything from tools/.
+
+Full instructions, results and credits (including the use of other teams' telemetry): README.md.
