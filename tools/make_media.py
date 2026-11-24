@@ -1,6 +1,6 @@
 """README figures from one logged race (dark panels that read on GitHub's light and dark themes). Training-time tool.
 
-  python tools/make_media.py RUN.run.csv OUTDIR [--only track,speed,progress,replay]
+  python tools/make_media.py RUN.run.csv OUTDIR [--only track,speed,progress,pipeline,replay]
 
 Palette and sizes follow the README design plan: one slate panel colour with a baked 1 px edge, a single-hue blue speed
 ramp, orange for the brake channel, violet only for our best time (never in a figure that also has blue). The ramp and
@@ -247,6 +247,59 @@ def progress(out):
     _save(fig, out)
 
 
+def pipeline(out):
+    """How the pieces fit: offline tools build the inputs, the controller runs them every tick. Drawn, not Mermaid, so it
+    renders in every viewer (a Mermaid block did not render for the user)."""
+    from matplotlib.patches import FancyBboxPatch
+    W, H = 1760, 600
+    fig = _panel(W, H)
+    _title(fig, "How the pieces fit", "Offline tools build the inputs; the controller runs them every tick.")
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)  # pixel coordinates, y down
+    ax.axis("off")
+    BW, BH = 206, 84
+    col = lambda c: 130 + (c - 1) * 240  # noqa: E731  box centre x for column c
+    top, bot = 225, 470
+    boxes = {
+        "W": (col(1), top, "Wall map", "ray casts + probes"),
+        "A": (col(2), top, "Racing line", "mincurv_line.py"),
+        "B": (col(3), top, "TOPP-RA speed plan", "build_profile.py"),
+        "I": (col(4.2), top, "Learned line offset", "ilc.py"),
+        "P": (col(5.2), top, "Per-corner tuning", "corner_opt.py"),
+        "R": (col(6.2), top, "Section networks", "six, tools/rl/"),
+        "L": (col(3.6), bot, "Line + offset", "committed data"),
+        "M": (col(5.2), bot, "Slip-aware MPC", "OSQP, 60 steps, 3 s"),
+        "N": (col(6.2), bot, "Corrections", "from the networks"),
+        "O": (col(7.2), bot, "Steering,\nthrottle, brake", ""),
+    }
+    for y, label in ((top, "Offline, in tools/"), (bot, "Every tick, in competition_code/")):
+        ax.add_patch(FancyBboxPatch((24, y - 66), W - 48, 132, boxstyle="round,pad=0,rounding_size=10", fc="none",
+                                    ec=AXIS, lw=0.6))
+        ax.text(40, y - 78, label, color=INK2, fontsize=9, va="bottom")
+    for k, (x, y, a_, b_) in boxes.items():
+        ax.add_patch(FancyBboxPatch((x - BW / 2, y - BH / 2), BW, BH, boxstyle="round,pad=0,rounding_size=8",
+                                    fc="#20242a", ec=AXIS, lw=0.8, zorder=3))
+        ax.text(x, y - (11 if b_ else 0), a_, color=INK1, fontsize=7.5, ha="center", va="center", zorder=4,
+                linespacing=1.25)
+        if b_:
+            ax.text(x, y + 17, b_, color=INK3, fontsize=7, ha="center", va="center", zorder=4)
+
+    def arrow(a_, b_, side="r"):
+        (x0, y0), (x1, y1) = boxes[a_][:2], boxes[b_][:2]
+        if side == "r":  # box to box on the same row
+            p0, p1 = (x0 + BW / 2, y0), (x1 - BW / 2, y1)
+        else:  # top row down to the bottom row
+            p0, p1 = (x0, y0 + BH / 2), (x1 - (30 if x1 > x0 + 5 else -30 if x1 < x0 - 5 else 0), y1 - BH / 2)
+        ax.annotate("", xy=p1, xytext=p0, arrowprops=dict(arrowstyle="-|>", color=INK3, lw=0.9, shrinkA=0, shrinkB=2,
+                                                          mutation_scale=11), zorder=2)
+
+    arrow("W", "A"); arrow("A", "B")
+    arrow("B", "L", "d"); arrow("I", "L", "d"); arrow("P", "M", "d"); arrow("R", "N", "d")
+    arrow("L", "M"); arrow("M", "N"); arrow("N", "O")
+    _save(fig, out)
+
+
 def _replay_frames(r, outdir, printed=None, nframes=216, hold=24):
     os.makedirs(outdir, exist_ok=True)
     W, H = 520, 680
@@ -300,6 +353,8 @@ def main(argv=None):
         speed_trace(r, os.path.join(a.outdir, "speed_trace.png"))
     if "progress" in only:
         progress(os.path.join(a.outdir, "progress.png"))
+    if "pipeline" in only:
+        pipeline(os.path.join(a.outdir, "pipeline.png"))
     if "replay" in only:
         _replay_frames(r, os.path.join(a.outdir, "replay_frames"), a.printed)
 

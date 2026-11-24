@@ -242,25 +242,7 @@ second lap.</sub>
 
 ## How it works
 
-```mermaid
-flowchart LR
-  subgraph offline["Offline, in tools/"]
-    W["Wall map<br/>ray casts + collision probes"] --> A["Minimum-curvature line<br/>mincurv_line.py"]
-    A --> B["TOPP-RA speed plan<br/>build_profile.py"]
-    I["Learned line offset<br/>ilc.py"]
-    P["Per-corner tuning<br/>corner_opt.py"]
-    R["Six section networks<br/>tools/rl/"]
-  end
-  subgraph runtime["Every tick, in competition_code/"]
-    L["Line + offset"] --> M["Slip-aware MPC<br/>OSQP, 60 steps, 3 s"]
-    M --> N["Bounded corrections<br/>from the networks"]
-    N --> O["Steering, throttle, brake"]
-  end
-  B --> L
-  I --> L
-  P --> M
-  R --> N
-```
+<img src="docs/img/pipeline.png" width="880" alt="Diagram of the pipeline. Offline tools build a wall map, a minimum-curvature racing line, a TOPP-RA speed plan, a learned line offset, per-corner tuning and six section networks. Every tick, the controller takes the line and offset, a slip-aware MPC tracks it, bounded corrections from the networks are added, and steering, throttle and brake come out.">
 
 ### 1. Racing line
 
