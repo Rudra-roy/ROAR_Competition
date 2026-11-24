@@ -7,7 +7,7 @@ small learned corrections ride on top.
 ![Python 3.8](https://img.shields.io/badge/python-3.8-3a4048?style=flat-square)
 ![CARLA 0.9.12](https://img.shields.io/badge/CARLA-0.9.12-3a4048?style=flat-square)
 ![Monza, 3 laps: 318.40 s median of 20](https://img.shields.io/badge/Monza%2C%203%20laps-318.40%20s%20median%20of%2020-6250d6?style=flat-square)
-![Tests: 164 passed, run locally](https://img.shields.io/badge/tests-164%20passed%20%28local%29-3a4048?style=flat-square)
+![Tests: 166 passed, run locally](https://img.shields.io/badge/tests-166%20passed%20%28local%29-3a4048?style=flat-square)
 ![Status: Fall 2026 entry](https://img.shields.io/badge/status-Fall%202026%20entry-3a4048?style=flat-square)
 
 <img src="docs/img/sim_timelapse.gif" width="480" alt="Chase-camera timelapse of the Tesla Model 3 driving three laps of Monza in CARLA, rendered by the simulator during one race of this entry.">
@@ -180,7 +180,7 @@ Paths can be overridden with `ROAR_MONZA` (map folder), `ROAR_PROTON` (Proton fo
 `ROAR_VENV` (venv, default `../.venv`).
 
 Development tools and tests (not needed to race): `uv pip install -r ROAR_Competition/requirements-dev.txt`, then
-`PYTHONPATH= python -m pytest tests/ -q` from the repo root (164 tests, about 5 minutes).
+`PYTHONPATH= python -m pytest tests/ -q` from the repo root (166 tests, about 5 minutes).
 
 </details>
 
@@ -365,7 +365,7 @@ labelled in the figure is the MPC's speed weight (`mpc.q_v` 2 to 128, see
 - The wall map is ray-cast except at the probed spots listed above.
 - 4 of the 20 gate races had the server window open. The simulation is synchronous, so wall-clock
   speed does not change the score.
-- The tests badge is static: `PYTHONPATH= python -m pytest tests/ -q` (164 tests, about 5 minutes, needs
+- The tests badge is static: `PYTHONPATH= python -m pytest tests/ -q` (166 tests, about 5 minutes, needs
   `requirements-dev.txt`).
 
 ## Licence

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROAR Monza entry: 318.40 s, slip-aware MPC</title>
+<meta name="description" content="A slip-aware MPC drives a Tesla Model 3 round Monza in CARLA for the ROAR Fall 2026 Simulation Racing competition: 318.40 s median over 20 races, no collisions. Replays, statistics and an engineering book.">
+<meta name="theme-color" content="#eef1f4">
+<link rel="icon" href="assets/media/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="ROAR Monza entry, home">
+      <svg viewBox="0 0 14 14" aria-hidden="true"><rect width="7" height="7" fill="#c41e2a"/><rect x="7" width="7" height="7" fill="#fff"/><rect y="7" width="7" height="7" fill="#fff"/><rect x="7" y="7" width="7" height="7" fill="#c41e2a"/></svg>
+      ROAR Monza entry
+    </a>
+    <nav class="right" aria-label="Main">
+      <div class="links">
+        <a href="#replay">Replay</a>
+        <a href="#statistics">Statistics</a>
+        <a href="#evolution">Evolution</a>
+        <a href="book.html">Engineering Book</a>
+        <a href="credits.html">Credits</a>
+        <a class="btn secondary" href="#run">Run it</a>
+      </div>
+      <details class="menu">
+        <summary aria-label="Menu">Menu</summary>
+        <div class="panel">
+          <a href="#replay">Replay</a><a href="#statistics">Statistics</a><a href="#evolution">Evolution</a>
+          <a href="book.html">Engineering Book</a><a href="credits.html">Credits</a><a href="#run">Run it</a>
+        </div>
+      </details>
+      <a class="btn primary" href="https://github.com/Rudra-roy/ROAR_Competition" rel="noopener">
+        <span>Code<span class="long"> on GitHub</span></span>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1.5h6.5V8M10.5 1.5 1.5 10.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" id="top" aria-label="Introduction">
+  <div class="stick">
+    <video muted loop playsinline preload="none" poster="assets/media/hero-poster.jpg" width="1920" height="1080" aria-label="Chase-camera footage of the Tesla Model 3 at Monza, rendered by CARLA during the 318.40 s race">
+      <source src="assets/media/hero.mp4" type="video/mp4">
+    </video>
+    <div class="scrim"></div><div class="scrim2"></div>
+    <div class="copy">
+      <div class="wrap">
+        <div class="reveal-in">
+          <h1>Three laps of Monza<br class="d"> in 318.40 seconds</h1>
+          <p class="lead">A slip-aware MPC drives a Tesla Model 3 in CARLA 0.9.12 for the ROAR Fall 2026 Simulation Racing competition. Median of 20 races, none with a collision; 1.35 s under the Summer 2026 winner's code, run in our simulator.</p>
+          <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+          <div class="cap">
+            <span>Chase camera, rendered by CARLA during one race of this entry (318.40 s, no collision).</span>
+            <button class="vbtn" type="button" aria-label="Pause video"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="replay" class="instrument" aria-labelledby="replay-h">
+  <div class="wrap">
+    <h2 id="replay-h" class="rv">Five versions, one race</h2>
+    <p class="lead rv" style="--i:1">Our controller at five points of its development, replayed together from their logged telemetry. Same car, same start, same three laps. The timing tower ranks them live.</p>
+    <div class="player rv" data-player style="--i:2">
+      <div class="pmap">
+        <canvas role="img" aria-label="Map of Monza with five cars, one per version of the controller, driving the race; the faster versions pull ahead"></canvas>
+        <div class="loading">Loading the race…</div>
+        <div class="legend"><span>slow</span><i></i><span>fast (trail of the car in focus)</span></div>
+      </div>
+      <div class="side">
+        <div class="tower">
+          <div class="hd"><span class="lap">Lap 1 / 3</span><span class="clk">t 0.00 s</span></div>
+          <ol aria-live="off"></ol>
+        </div>
+        <div class="hud" aria-label="Instruments of the car in focus">
+          <div class="who small"></div>
+          <div class="big sp">0.0<small>m/s</small></div>
+          <div class="row thr"><span>Throttle</span><span class="bar"><b></b></span><span class="val">0 %</span></div>
+          <div class="row brk"><span>Brake</span><span class="bar brk"><b></b></span><span class="val">0 %</span></div>
+          <div class="row str"><span>Steering</span><span class="bar"><b></b></span><span class="val">0.00</span></div>
+          <div class="row slp"><span>Sideslip</span><span></span><span class="val">n/a</span></div>
+        </div>
+<div class="controls">
+      <button class="ib play" type="button" aria-label="Play" aria-pressed="false"></button>
+      <button class="ib restart" type="button" aria-label="Restart"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2v12M13 2 5 8l8 6z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+      <div class="scrub"><div class="ticks" aria-hidden="true"></div><input type="range" min="0" max="341.2" step="0.05" value="0" aria-label="Race time"></div>
+      <label class="small" style="color:var(--ink2)">Speed <select class="speed"><option value="1">1×</option><option value="4">4×</option><option value="8" selected>8×</option><option value="16">16×</option><option value="32">32×</option></select></label>
+      <label class="small" style="color:var(--ink2)">Instruments <select class="focus"><option value="v5" selected>v5</option><option value="v4">v4</option><option value="v3">v3</option><option value="v2">v2</option><option value="v1">v1</option></select></label>
+    </div>
+<div class="chips" role="group" aria-label="Versions shown">
+      <input type="checkbox" id="c1" value="v1" checked disabled><label for="c1" style="--c:#5f6873"><i></i>v1 <small data-k="v1">341.20</small></label>
+      <input type="checkbox" id="c2" value="v2" checked disabled><label for="c2" style="--c:#7d8691"><i></i>v2 <small data-k="v2">322.50</small></label>
+      <input type="checkbox" id="c3" value="v3" checked disabled><label for="c3" style="--c:#9da4ad"><i></i>v3 <small data-k="v3">319.85</small></label>
+      <input type="checkbox" id="c4" value="v4" checked disabled><label for="c4" style="--c:#c3c8ce"><i></i>v4 <small data-k="v4">319.15</small></label>
+      <input type="checkbox" id="c5" value="v5" checked><label for="c5" style="--c:#ffffff"><i></i>v5 <small data-k="v5">318.40</small></label>
+    </div>
+<p class="legend-line">Keyboard, with focus inside the player: Space plays or pauses, the arrow keys seek 5 s (Shift: 30 s), 1 to 5 toggle versions. Red and white ticks on the scrubber mark the six named corners and the lap lines of the car in focus.</p>
+      </div>
+    </div>
+    <p class="src">Positions are rebuilt from each race's logged line position and lateral offset on that version's own racing line; ranking and gaps use distance along the track centreline, a common axis. Source: race logs, tools/site_data.py.</p>
+    <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+    <details><summary>Show as table</summary><div class="lapstable table-scroll"></div></details>
+    <noscript><div class="noscript-note"><img src="img/lap_replay.gif" width="360" height="470" alt="Animated top-down replay of the 318.40 s race from its logged telemetry: a dot moves round the Monza map with a speed-coloured trail."><p>The interactive replay needs JavaScript; this animation is the 318.40 s race only.</p></div></noscript>
+  </div>
+</section>
+
+<section id="statistics" aria-labelledby="stats-h">
+  <div class="wrap">
+    <h2 id="stats-h" class="rv">Statistics</h2>
+    <p class="lead rv" style="--i:1">What the final setup does, and how it compares with where it started.</p>
+    <div class="tiles">
+      <div class="tile rv" style="--i:0"><span class="big num">318.40<small>s</small></span><p>Median of 20 races; range 318.30 to 318.40 s.</p><p class="src">Release gate, 20 races (logs/gate_g2.csv)</p></div>
+      <div class="tile rv" style="--i:1"><span class="big num">0 of 20</span><p>Races with a collision in the release gate.</p><p class="src">logs/gate_g2.csv</p></div>
+      <div class="tile rv" style="--i:2"><span class="big num">0.13<small>m</small></span><p>Closest approach of the car body to a wall, over 20 races, on our wall map.</p><p class="src">The map is ray-cast except at probed corners.</p></div>
+      <div class="tile rv" style="--i:3"><span class="big num">−1.35<small>s</small></span><p>Against the Summer 2026 winner's code run in our simulator (319.75 s).</p><p class="src">318.40 − 319.75</p></div>
+      <div class="tile rv" style="--i:4"><span class="big num">1658.90<small>s</small></span><p>The starter code's time in the same simulator.</p><p class="src">results.csv, row "baseline"</p></div>
+      <div class="tile rv" style="--i:5"><span class="big num">52.61<small>m/s</small></span><p>Mean speed over the 318.40 s race, against 49.27 m/s for v1. Top speed is 71.5 m/s in every version.</p><p class="src">Race logs, tools/site_data.py</p></div>
+    </div>
+    <div class="limits rv" id="limits">
+      <p class="lt">Limits of this result</p>
+      <p>Measured on one machine: Ubuntu 22.04, RTX 5060 Ti, Monza server under GE-Proton 9. Windows is untested. 20 of 20 clean races bound the crash rate only to about 1 in 7. The wall map is ray-cast except at the probed corners.</p>
+    </div>
+    <div class="charts two">
+      <figure class="fig rv"><h3>Race time by version</h3><div class="chart" data-chart="versions"></div>
+        <figcaption>Medians of each version's gate races (5 races; 20 for v5). Hover a point for what changed.<br>Source: experiment log, lines 168, 263, 278, 289 and 346 (not published), and the release gate.</figcaption></figure>
+      <figure class="fig rv" style="--i:1"><h3>MPC speed weight</h3><div class="chart" data-chart="qv"></div>
+        <figcaption>One race per value; 128 was kept and 256 is within noise. The weight alone gained 1.75 s here; with the per-corner re-tune that followed, 2.3 s.<br>Source: experiment log, lines 275 to 276 (not published).</figcaption></figure>
+    </div>
+    <figure class="fig rv" style="margin-top:24px"><h3>Sector times on the second lap, by version</h3><div class="chart" data-chart="sectors"></div>
+      <figcaption>Purple: fastest of the five. Green: faster than the version before. Yellow: slower than the version before. Sectors are cut at the midpoints between the named corners, on the track centreline, so versions with different racing lines compare.<br>Source: race logs, tools/site_data.py.</figcaption></figure>
+    <figure class="fig rv" style="margin-top:24px"><h3>Every race in our results log</h3><div class="chart" data-chart="results"></div>
+      <figcaption>Each dot is one race, oldest on the left. It leaves out the optimiser batches and most parallel-slot races, which are not in the results log; the 20 release-gate races are appended in violet.<br>Source: results.csv (218 races) and logs/gate_g2.csv.</figcaption></figure>
+    <p class="rv" style="margin-top:32px">More figures, with their code and data, are in the <a href="book.html">Engineering Book</a>.</p>
+  </div>
+</section>
+
+<section id="evolution" class="evo" aria-labelledby="evo-h">
+  <div class="wrap">
+    <h2 id="evo-h" class="rv">How the time came down</h2>
+    <p class="lead rv" style="--i:1">Five versions of the controller, each a gated release. The line advances as you scroll; the spacing is not time.</p>
+    <ol class="steps">
+      <li><span class="tag">v0 · starter code</span><span class="time">1658.90 s</span><p class="w">The organisers' starter code.</p><p class="meta">1 race · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/a1b7214" rel="noopener">a1b7214</a></p></li>
+      <li><span class="tag">v1</span><span class="time">341.20 s</span><p class="w">Early MPC with a TOPP-RA speed plan.</p><p class="meta">median of 5 · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/780b4bb" rel="noopener">780b4bb</a> · <a href="book.html#ch3">book</a></p></li>
+      <li><span class="tag">v2</span><span class="time">322.50 s</span><p class="w">Learned corrections and the kink exit.</p><p class="meta">median of 5 · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/462bc0b" rel="noopener">462bc0b</a> · <a href="book.html#s5-6">book</a></p></li>
+      <li><span class="tag">v3</span><span class="time">319.85 s</span><p class="w">MPC speed weight 2 to 128, and a per-corner re-tune.</p><p class="meta">median of 5 · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/c1c1009" rel="noopener">c1c1009</a> · <a href="book.html#s5-3">book</a></p></li>
+      <li><span class="tag">v4</span><span class="time">319.15 s</span><p class="w">Corner exits and a re-tune.</p><p class="meta">median of 5 · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/4683eb1" rel="noopener">4683eb1</a> · <a href="book.html#s5-5">book</a></p></li>
+      <li><span class="tag">v5</span><span class="time">318.40 s</span><p class="w">Real-wall corridor map.</p><p class="meta">median of 20 · <a href="https://github.com/Rudra-roy/ROAR_Competition/commit/d6f964a" rel="noopener">d6f964a</a> · <a href="book.html#s5-7">book</a></p></li>
+    </ol>
+    <p class="src" style="margin-top:32px">Medians of each version's gate races, from our experiment log (not published); the starter code ran once.</p>
+    <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+  </div>
+</section>
+
+<section id="book" aria-labelledby="book-h">
+  <div class="wrap">
+    <h2 id="book-h" class="rv">The Engineering Book</h2>
+    <p class="lead rv" style="--i:1">How a starter controller that needed 1658.90 s became a 318.40 s entry, with the dead ends left in.</p>
+    <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+    <ol class="toc-list">
+      <li class="rv"><a href="book.html#ch1"><span class="n">1</span><span><b>Where we started</b><span>The task, the starter code's 1658.90 s, and getting a simulator we could trust.</span></span></a></li>
+      <li class="rv" style="--i:1"><a href="book.html#ch2"><span class="n">2</span><span><b>Where we are now</b><span>The result, how much it covers, and how close the car gets to the walls.</span></span></a></li>
+      <li class="rv" style="--i:2"><a href="book.html#ch3"><span class="n">3</span><span><b>How we got there</b><span>Five versions, sector by sector, and where the time went.</span></span></a></li>
+      <li class="rv" style="--i:3"><a href="book.html#ch4"><span class="n">4</span><span><b>What we tried that did not work</b><span>Each dead end with its number, so nobody has to try it blindly again.</span></span></a></li>
+      <li class="rv" style="--i:4"><a href="book.html#ch5"><span class="n">5</span><span><b>How it was achieved</b><span>The racing line, speed plan, MPC, learned offset, per-corner tuning, learned corrections, wall map and safety gate.</span></span></a></li>
+    </ol>
+    <a class="btn secondary rv" href="book.html">Open the Engineering Book</a>
+  </div>
+</section>
+
+<section id="run" class="dark" aria-labelledby="run-h">
+  <div class="wrap">
+    <h2 id="run-h" class="rv">Run it yourself</h2>
+    <div class="run">
+      <div class="rv">
+        <p class="lead" style="color:var(--ink2)">On a machine where the Monza CARLA server already runs natively (the organisers' Windows setup):</p>
+        <ol>
+          <li>Use Python 3.8: carla 0.9.12 has no wheels for later versions.</li>
+          <li>Install ROAR_PY first (it provides <code>roar_py_interface</code>, carla and gymnasium), then this repo's packages: <code>pip install -r requirements.txt</code>.</li>
+          <li>Start the Monza server, then run the unmodified starter runner:</li>
+        </ol>
+        <pre>cd competition_code
+python competition_runner.py</pre>
+        <ol start="4"><li>Expected output: <code>Solution finished in 318.3… seconds</code> or <code>318.4…</code> (318.30 to 318.40 s), and no <code>major collision</code> line.</li></ol>
+      </div>
+      <div class="rv" style="--i:1">
+        <h3 style="color:var(--ink1)">Two setups</h3>
+        <p><strong style="color:var(--ink1)">Linux with GE-Proton 9</strong> is the setup we tested. <strong style="color:var(--ink1)">Windows</strong> is the organisers' setup and was not tested by us. Both are written out step by step, with troubleshooting, in the README.</p>
+        <p style="display:flex;gap:12px;flex-wrap:wrap">
+          <a class="btn primary" href="https://github.com/Rudra-roy/ROAR_Competition" rel="noopener">Code on GitHub</a>
+          <a class="btn secondary" href="https://github.com/Rudra-roy/ROAR_Competition#readme" rel="noopener">Read the README</a>
+        </p>
+        <p class="caveat" style="color:var(--ink2)">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div><p class="fh">This site</p><ul><li><a href="index.html">Home</a></li><li><a href="book.html">Engineering Book</a></li><li><a href="credits.html">Credits and licence</a></li></ul></div>
+      <div><p class="fh">Repository</p><ul><li><a href="https://github.com/Rudra-roy/ROAR_Competition" rel="noopener">GitHub</a></li><li><a href="https://github.com/Rudra-roy/ROAR_Competition#readme" rel="noopener">README</a></li><li><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/main/LICENSE" rel="noopener">LICENSE (MIT)</a></li></ul></div>
+      <div><p class="fh">Competition</p><ul><li><a href="https://roar.gitbook.io/roar-competition-documentation/" rel="noopener">ROAR documentation</a></li><li><a href="https://roar.berkeley.edu/monza-map/" rel="noopener">Monza map</a></li></ul></div>
+    </div>
+    <p class="fine">MIT licence. Simulator images are CARLA 0.9.12 renders of our own races. This site loads nothing from other servers.</p>
+  </div>
+</footer>
+<script src="assets/js/site.js" defer></script>
+<script src="assets/js/player.js" defer></script>
+<script src="assets/js/charts.js" defer></script>
+</body>
+</html>

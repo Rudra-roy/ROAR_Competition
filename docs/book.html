@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engineering Book: ROAR Monza entry</title>
+<meta name="description" content="How a starter controller that needed 1658.90 s became a 318.40 s Monza entry: where we started, where we are now, how we got there, what did not work, and how it was achieved.">
+<meta name="theme-color" content="#eef1f4">
+<link rel="icon" href="assets/media/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body class="plain">
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html" aria-label="ROAR Monza entry, home">
+      <svg viewBox="0 0 14 14" aria-hidden="true"><rect width="7" height="7" fill="#c41e2a"/><rect x="7" width="7" height="7" fill="#fff"/><rect y="7" width="7" height="7" fill="#fff"/><rect x="7" y="7" width="7" height="7" fill="#c41e2a"/></svg>
+      ROAR Monza entry
+    </a>
+    <nav class="right" aria-label="Main">
+      <div class="links">
+        <a href="index.html#replay">Replay</a>
+        <a href="index.html#statistics">Statistics</a>
+        <a href="index.html#evolution">Evolution</a>
+        <a href="book.html" aria-current="page">Engineering Book</a>
+        <a href="credits.html">Credits</a>
+        <a class="btn secondary" href="index.html#run">Run it</a>
+      </div>
+      <details class="menu">
+        <summary aria-label="Menu">Menu</summary>
+        <div class="panel">
+          <a href="index.html#replay">Replay</a><a href="index.html#statistics">Statistics</a><a href="index.html#evolution">Evolution</a>
+          <a href="book.html" aria-current="page">Engineering Book</a><a href="credits.html">Credits</a><a href="index.html#run">Run it</a>
+        </div>
+      </details>
+      <a class="btn primary" href="https://github.com/Rudra-roy/ROAR_Competition" rel="noopener">
+        <span>Code<span class="long"> on GitHub</span></span>
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1.5h6.5V8M10.5 1.5 1.5 10.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<div class="wrap">
+  <div class="bookhead">
+    <h1 class="rv">The Engineering Book</h1>
+    <p class="lead rv" style="--i:1">How a starter controller that needed 1658.90 s to drive three laps of Monza became a 318.40 s entry, with the dead ends left in. Five chapters: where we started, where we are now, how we got there, what we tried that did not work, and how it was achieved.</p>
+    <div class="limits rv" id="limits">
+      <p class="lt">Limits of this result</p>
+      <p>Measured on one machine: Ubuntu 22.04, RTX 5060 Ti, Monza server under GE-Proton 9. Windows is untested. 20 of 20 clean races bound the crash rate only to about 1 in 7. The wall map is ray-cast except at the probed corners.</p>
+    </div>
+    <p class="src">The raw race logs and the experiment log are not published in the repository. Numbers taken from them are marked with their source, for example "experiment log, line 275", and the figures are drawn from data computed by tools/site_data.py.</p>
+  </div>
+
+  <div class="book">
+    <aside class="sidebar" aria-label="Contents">
+      <a class="ch" href="#ch1">1 Where we started</a>
+      <a href="#s1-1">1.1 The task</a><a href="#s1-2">1.2 The starter code</a><a href="#s1-3">1.3 A simulator we could trust</a><a href="#s1-4">1.4 A model of the car</a><a href="#s1-5">1.5 The first finish</a>
+      <a class="ch" href="#ch2">2 Where we are now</a>
+      <a href="#s2-1">2.1 The result</a><a href="#s2-2">2.2 The release gate</a><a href="#s2-3">2.3 Closest to the walls</a><a href="#s2-4">2.4 Limits of this result</a><a href="#s2-5">2.5 Watch it</a>
+      <a class="ch" href="#ch3">3 How we got there</a>
+      <a href="#s3-1">3.1 Five versions</a><a href="#s3-2">3.2 Every gated version</a><a href="#s3-3">3.3 Every race</a><a href="#s3-4">3.4 Where the time went</a>
+      <a class="ch" href="#ch4">4 What did not work</a>
+      <a href="#s4-1">4.1 The pattern</a>
+      <a class="ch" href="#ch5">5 How it was achieved</a>
+      <a href="#s5-1">5.1 The racing line</a><a href="#s5-2">5.2 The speed plan</a><a href="#s5-3">5.3 The controller</a><a href="#s5-4">5.4 The learned line offset</a><a href="#s5-5">5.5 Per-corner tuning</a><a href="#s5-6">5.6 Learned corrections</a><a href="#s5-7">5.7 Wall map and probes</a><a href="#s5-8">5.8 The safety gate</a>
+      <a class="ch" href="#end">If we started again</a>
+    </aside>
+
+    <article class="prose">
+      <details class="toc"><summary>Contents</summary>
+        <a href="#ch1">1 Where we started</a><a href="#ch2">2 Where we are now</a><a href="#ch3">3 How we got there</a><a href="#ch4">4 What did not work</a><a href="#ch5">5 How it was achieved</a><a href="#end">If we started again</a>
+      </details>
+
+<!-- ============================ 1 ============================ -->
+<section class="chapter" id="ch1" aria-labelledby="h-ch1">
+  <h2 id="h-ch1"><span class="cn">1</span>Where we started</h2>
+  <p>The starting point was slow, a simulator that had to be made reproducible first, and a first controller that crashed before it ever finished a lap.</p>
+
+  <h3 id="s1-1"><span class="cn">1.1</span>The task<a class="anchor" href="#s1-1" aria-label="Link to this section">#</a></h3>
+  <p>The ROAR Fall 2026 Simulation Racing competition (UC Berkeley) asks for a car that drives three standing-start laps of Monza in CARLA 0.9.12, a Tesla Model 3, as fast as it can. The score is the simulated time of the three laps, and a collision is not acceptable. The submission reads its sensors only through <code>get_last_gym_observation()</code>, never steps the world and never teleports, and it runs under the organisers' own runner, which we do not modify.</p>
+  <figure class="fig wide imgfig"><img src="img/pipeline.png" width="880" height="293" loading="lazy" decoding="async" alt="Diagram of the pipeline. Offline tools build a wall map, a minimum-curvature racing line, a TOPP-RA speed plan, a learned line offset, per-corner tuning and six section networks. Every tick, the controller takes the line and offset, a slip-aware MPC tracks it, bounded corrections from the networks are added, and steering, throttle and brake come out.">
+    <figcaption>The pieces of the finished entry. Offline tools build the inputs; the controller runs them every tick. Chapter 5 takes them one by one.</figcaption></figure>
+
+  <h3 id="s1-2"><span class="cn">1.2</span>The starter code<a class="anchor" href="#s1-2" aria-label="Link to this section">#</a></h3>
+  <div class="keynum"><div class="big">1658.90 s</div><p>The starter code's time in our simulator; it finished clean.</p><p class="src">results.csv, row "baseline"; experiment log, line 26</p></div>
+  <p>The organisers' starter code finished three laps in 1658.90 s without a collision. Everything after that is about driving the same three laps in a fifth of the time.</p>
+
+  <h3 id="s1-3"><span class="cn">1.3</span>A simulator we could trust<a class="anchor" href="#s1-3" aria-label="Link to this section">#</a></h3>
+  <p>Monza ships as a Windows build of CARLA. We run it on Linux under GE-Proton 9, which needs <code>-dx12</code> (the DX11 path asserts) and must never be started with <code>-quality-level=Low</code>, which crashes the map for want of materials. The simulation is synchronous, so the wall-clock speed of the machine does not change the score. The same setup still varies by about 0.05 s from race to race, and we treat anything smaller than that as noise.</p>
+  <p>The first tool we built was not a controller but a parallel evaluator: one simulator per slot, each on its own port, four races at a time. Every later result in this book was measured that way.</p>
+
+  <h3 id="s1-4"><span class="cn">1.4</span>A model of the car<a class="anchor" href="#s1-4" aria-label="Link to this section">#</a></h3>
+  <p>Our first controller needed a model of the car, and fitting one meant driving it. The first system-identification laps crashed three times:</p>
+  <ul>
+    <li>The first lap crashed with a dither of ±0.9 m at 35 to 41 m/s, on a line within about 0.5 m of the walls (experiment log, line 67).</li>
+    <li>The second crashed at line distance 514 m at 53.5 m/s, in a lateral oscillation: a pure-pursuit lookahead of 16 m is too short at that speed (line 72).</li>
+    <li>The third crashed at about 4155 m at 25.6 m/s with the car exactly on its line, because the line ran 4.1 to 4.8 m from the centreline where the wall allowed 4.3 to 4.7 m (line 75).</li>
+  </ul>
+  <p>The third crash taught the lesson that shaped the rest: the line we had borrowed was a pure-pursuit <em>target</em>, which cuts inside by design, not a path a car can drive. The fitted model that came out of this: top speed 71.55 m/s, braking 15.93 m/s² (line 87).</p>
+
+  <h3 id="s1-5"><span class="cn">1.5</span>The first finish<a class="anchor" href="#s1-5" aria-label="Link to this section">#</a></h3>
+  <p>The first race our own MPC finished took 407.10 s, without touching anything, at a top speed of 60.3 m/s (experiment log, line 122). From there the gated versions run 383.20 s, 364.50 s, 360.10 s and 340.60 s (figure 3.2). Chapter 3 is that road.</p>
+  <p class="small"><a href="#ch1">Back to the top of chapter 1</a> · <a href="#ch2">Next: where we are now</a></p>
+</section>
+
+<!-- ============================ 2 ============================ -->
+<section class="chapter" id="ch2" aria-labelledby="h-ch2">
+  <h2 id="h-ch2"><span class="cn">2</span>Where we are now</h2>
+  <p>318.40 s median over 20 races, no collision, 0.13 m from the nearest wall at the closest. Here is exactly how much that claim covers.</p>
+  <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+
+  <h3 id="s2-1"><span class="cn">2.1</span>The result<a class="anchor" href="#s2-1" aria-label="Link to this section">#</a></h3>
+  <div class="keynum"><div class="big">−1.35 s</div><p>Against the Summer 2026 winner's code run in our simulator (319.75 s).</p><p class="src">318.40 − 319.75</p></div>
+  <p>The release gate ran 20 full races of the committed setup: 318.30 to 318.40 s, median 318.40 s, none with a collision. The same simulator ran the Summer 2026 winner's code at 319.75 s, so the entry is 1.35 s faster, on our machine. The two numbers share a simulator and a machine, not an evaluation by the organisers.</p>
+  <figure class="fig imgfig wide"><img src="img/track_speed.png" width="600" height="880" loading="lazy" decoding="async" alt="Top-down map of the Monza circuit with the driven path of one flying lap coloured by speed, dark blue where slow and light blue where fast; the first chicane, c1329, Lesmo 1, the kink, the bottom curve and the final hairpin are labelled." class="mapimg">
+    <figcaption>One flying lap of the 318.40 s race, coloured by speed. The six corners named here are the ones the rest of the book keeps returning to.<br>Source: race log, tools/make_media.py.</figcaption></figure>
+
+  <h3 id="s2-2"><span class="cn">2.2</span>The release gate<a class="anchor" href="#s2-2" aria-label="Link to this section">#</a></h3>
+  <p>A release is gated by <code>tools/gate.py</code>: 20 full races of the committed setup, on slot checkouts verified byte-for-byte against the repository, four of them with the simulator window open. Each race's closest approach of the car body to a wall is measured from its log. The rule is that every race finishes with no collision and the closest approach is at least 0.10 m. Section 5.8 tells how the gate failed once before it passed.</p>
+
+  <h3 id="s2-3"><span class="cn">2.3</span>Where the car is closest to the walls<a class="anchor" href="#s2-3" aria-label="Link to this section">#</a></h3>
+  <p>Across the gate's 20 races the closest the car body came to a wall was 0.13 m, at Lesmo 1 or the final hairpin. The figure for those corners comes from a wall map that was ray-cast and then corrected by teleporting the car through its own poses; away from those corners the map is ray-cast only. The static probe of the car's own poses gives the clearances in section 5.7.</p>
+
+  <h3 id="s2-4"><span class="cn">2.4</span>Limits of this result<a class="anchor" href="#s2-4" aria-label="Link to this section">#</a></h3>
+  <div class="limits"><p class="lt">Limits of this result</p><p>Measured on one machine: Ubuntu 22.04, RTX 5060 Ti, Monza server under GE-Proton 9. Windows is untested. 20 of 20 clean races bound the crash rate only to about 1 in 7. The wall map is ray-cast except at the probed corners.</p></div>
+  <p>Where "about 1 in 7" comes from: if every race has the same unknown chance <em>p</em> of a collision and 20 of 20 were clean, the largest <em>p</em> that still leaves a 5 % chance of seeing 20 clean races solves (1 − <em>p</em>)<sup>20</sup> = 0.05, which gives <em>p</em> ≈ 0.139. That is arithmetic on the gate, not a claim about the organisers' machine. A crashing car in our tests touched a wall at 0.0 to 0.1 m, and the closest clean approach was 0.13 m, which is why the clearance is a stronger piece of evidence than the count.</p>
+
+  <h3 id="s2-5"><span class="cn">2.5</span>Watch it<a class="anchor" href="#s2-5" aria-label="Link to this section">#</a></h3>
+  <p>Three frames from the chase camera, rendered by CARLA during the 318.40 s race, at the three corners where the car comes closest to a wall.</p>
+  <div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));max-width:960px">
+    <figure class="fig imgfig" style="padding:8px"><img src="assets/media/still-first-chicane.jpg" width="960" height="540" loading="lazy" decoding="async" alt="The car at the first-chicane exit in the CARLA render, seen from the chase camera."><figcaption>First-chicane exit</figcaption></figure>
+    <figure class="fig imgfig" style="padding:8px"><img src="assets/media/still-lesmo1.jpg" width="960" height="540" loading="lazy" decoding="async" alt="The car at Lesmo 1 in the CARLA render, seen from the chase camera."><figcaption>Lesmo 1</figcaption></figure>
+    <figure class="fig imgfig" style="padding:8px"><img src="assets/media/still-final-hairpin.jpg" width="960" height="540" loading="lazy" decoding="async" alt="The car at the final hairpin in the CARLA render, seen from the chase camera."><figcaption>Final hairpin</figcaption></figure>
+  </div>
+  <p class="small" style="margin-top:16px"><a href="index.html#replay">Watch the five versions race together</a> · <a href="#ch3">Next: how we got there</a></p>
+</section>
+
+<!-- ============================ 3 ============================ -->
+<section class="chapter" id="ch3" aria-labelledby="h-ch3">
+  <h2 id="h-ch3"><span class="cn">3</span>How we got there</h2>
+  <p>Five headline versions, and a longer history of gated releases that was not a straight line down. Most of the time came from making the car follow its own plan and from measuring where the walls really are, not from a faster plan.</p>
+  <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+
+  <h3 id="s3-1"><span class="cn">3.1</span>Five versions<a class="anchor" href="#s3-1" aria-label="Link to this section">#</a></h3>
+  <figure class="fig wide"><div class="chart" data-chart="versions" data-base="assets/data/"></div>
+    <figcaption>Figure 3.1. Medians of each version's gate races (5 races; 20 for v5). Hover a point for what changed and the commit.<br>Source: experiment log, lines 168, 263, 278, 289 and 346 (not published).</figcaption></figure>
+  <ol>
+    <li><strong>v1, 341.20 s.</strong> An early MPC with a TOPP-RA speed plan.</li>
+    <li><strong>v2, 322.50 s.</strong> Learned corrections, and a late-apex exit at the kink.</li>
+    <li><strong>v3, 319.85 s.</strong> The MPC speed weight raised from 2 to 128, and a per-corner re-tune.</li>
+    <li><strong>v4, 319.15 s.</strong> Corner exits and a re-tune.</li>
+    <li><strong>v5, 318.40 s.</strong> A line shaped by the measured walls, the real-wall corridor map.</li>
+  </ol>
+
+  <h3 id="s3-2"><span class="cn">3.2</span>Every gated version<a class="anchor" href="#s3-2" aria-label="Link to this section">#</a></h3>
+  <p>The five headline versions leave out most of the history. The gated releases in order, from the experiment log: 383.20 s, 364.50 s, 360.10 s, 340.60 s, 341.20 s, 340.55 s, 333.90 s, 331.80 s, 326.75 s, 322.95 s, 322.50 s, 322.35 s, 319.85 s, 319.15 s and 318.40 s. The series is not monotone. Version 8d at 340.60 s was gated before 8e at 341.20 s, and 8e was kept: it had about 0.07 m more wall margin and half the steering jerk, for 0.6 s per race (experiment log, line 169). We decided early that margin outranks lap time, and 8e is the first place that decision cost us a number.</p>
+
+  <h3 id="s3-3"><span class="cn">3.3</span>Every race<a class="anchor" href="#s3-3" aria-label="Link to this section">#</a></h3>
+  <figure class="fig wide"><div class="chart" data-chart="results" data-base="assets/data/"></div>
+    <figcaption>Figure 3.3. Every race in our results log, oldest on the left, with the 20 release-gate races appended in violet. The log leaves out the optimiser batches and most parallel-slot races.<br>Source: results.csv (218 races) and logs/gate_g2.csv.</figcaption></figure>
+
+  <h3 id="s3-4"><span class="cn">3.4</span>Where the time went<a class="anchor" href="#s3-4" aria-label="Link to this section">#</a></h3>
+  <figure class="fig wide"><div class="chart" data-chart="sectors" data-base="assets/data/"></div>
+    <figcaption>Figure 3.4. Sector times on the second lap, by version. Purple: fastest of the five. Green: faster than the version before. Yellow: slower than the version before.<br>Source: race logs, tools/site_data.py.</figcaption></figure>
+  <figure class="fig wide" style="margin-top:20px"><div class="chart" data-chart="telemetry" data-base="assets/data/"></div>
+    <figcaption>Figure 3.5. Telemetry of one race per version (the race whose time equals its gate median). The top speed did not change across the five versions; the mean speed rose from 49.27 to 52.61 m/s.<br>Source: race logs, tools/site_data.py.</figcaption></figure>
+  <p class="small"><a href="#ch2">Previous: where we are now</a> · <a href="#ch4">Next: what did not work</a></p>
+</section>
+
+<!-- ============================ 4 ============================ -->
+<section class="chapter" id="ch4" aria-labelledby="h-ch4">
+  <h2 id="h-ch4"><span class="cn">4</span>What we tried that did not work</h2>
+  <p>Most ideas made the car slower or put it into a wall. This table records each one with its number, so nobody has to try it blindly again.</p>
+  <div class="table-scroll"><table class="dead">
+    <thead><tr><th>Idea</th><th>What happened</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>A low MPC speed weight (q_v = 2)</td><td>The car ran 3 to 9 m/s below its plan in every corner. Raising the weight plus the re-tune that followed recovered 2.3 s; the weight alone gained 1.75 s.</td><td>README; experiment log, line 275</td></tr>
+      <tr><td>A free minimum-curvature line inside the waypoint polygon</td><td>Crashed. Fences and obstacles sit inside the polygon, so it is not the wall layout.</td><td>line 168, README</td></tr>
+      <tr><td>Splicing other cars' driven paths into our line</td><td>Two splices collided; the clean third, 338.45 s, was slower than ours. Later splices of a second entry's path ran 320.25 to 320.45 s or crashed.</td><td>lines 196, 295</td></tr>
+      <tr><td>Pure-pursuit steering</td><td>Crashed in the early system-identification laps, in a lateral oscillation at 53.5 m/s with a 16 m lookahead.</td><td>line 72</td></tr>
+      <tr><td>Hybrid pursuit and MPC</td><td>Three collisions at the chicane's second apex; the pursuit cut 2.1 m inside onto the obstacle.</td><td>line 244</td></tr>
+      <tr><td>A tyre-scrub model in the plan</td><td>341.20 s and 334.60 s against 333.90 s: rejected.</td><td>line 199</td></tr>
+      <tr><td>Harder braking (brake scale 1.10)</td><td>334.65 s, with the hairpin 4.31 m off the centreline.</td><td>line 211</td></tr>
+      <tr><td>Pedal braking at 1.25× (sections 0 to 8)</td><td>A spin at the long curve and a collision.</td><td>line 226</td></tr>
+      <tr><td>Pedal braking at 1.25× (sections 0 to 4)</td><td>340.40 s with a 4.8 m slide.</td><td>line 227</td></tr>
+      <tr><td>Braking from the measured pedal map</td><td>326 to 332 s, slower than the 322 s car of the time: the car cannot brake that hard while cornering.</td><td>line 281</td></tr>
+      <tr><td>Plan speed scaled by 1.03</td><td>Collided.</td><td>line 232</td></tr>
+      <tr><td>A more aggressive MPC (lateral margin 1.4, q_v 4)</td><td>330.75 s against 329.55 s.</td><td>line 232</td></tr>
+      <tr><td>Binary pedals</td><td>336.25 s with a dwell of 3, a collision with a dwell of 5: the MPC's smooth acceleration model fights the dithering.</td><td>line 240</td></tr>
+      <tr><td>A steering cap of 0.08</td><td>338.20 s.</td><td>line 195</td></tr>
+      <tr><td>Widening all four corners, three corners, or the chicane and hairpin</td><td>Each collided, at a corner exit or in an understeer spin.</td><td>line 195</td></tr>
+      <tr><td>A full-width chicane</td><td>Collided at every cap from 4.6 to 3.6 m: an unmapped obstacle about 2.4 m from the centreline.</td><td>line 217</td></tr>
+      <tr><td>An RL residual trained on flying laps only</td><td>1.40 s per lap faster in training, but 2 of 5 full-race gate runs collided.</td><td>lines 248, 250</td></tr>
+      <tr><td>Full-race evolution strategies</td><td>Candidates to 318.70 s, but a re-race of the adopted one crashed at the Lesmo-1 apex, and every later candidate faster than about 319.05 s failed the body rule at the final-hairpin inside apex.</td><td>lines 304 to 309</td></tr>
+      <tr><td>A slide-hold steering clamp</td><td>All variants slower or crashed.</td><td>line 280</td></tr>
+      <tr><td>Refitting the tyre model to the new driving</td><td>Better prediction (yaw-rate error 0.053 down to 0.034), but every variant crashed.</td><td>lines 296 to 298</td></tr>
+      <tr><td>A global learning round on the line offset</td><td>322.25 s, but the car ran 0.35 m beyond its driven paths: rejected.</td><td>line 263</td></tr>
+      <tr><td>Reshaping c1329 on the corridor map</td><td>Always crashed at its apex.</td><td>line 332</td></tr>
+      <tr><td>Sliding harder through Lesmo</td><td>Faster, but the body swept 0.3 to 0.4 m further inside, and one run hit the apex.</td><td>README</td></tr>
+      <tr><td>Ray casts alone as the walls</td><td>They missed the lower part of some fences by 0.1 to 0.25 m.</td><td>README</td></tr>
+      <tr><td>Networks in every section</td><td>Flying-lap gains did not carry over to full races; only four sections stayed active.</td><td>README</td></tr>
+    </tbody></table></div>
+  <p class="src">Source: experiment log (not published), by line number, and the README.</p>
+
+  <h3 id="s4-1"><span class="cn">4.1</span>The pattern<a class="anchor" href="#s4-1" aria-label="Link to this section">#</a></h3>
+  <p>Read down the table and one pattern repeats. Every candidate that tuning or learning found to be faster got its time by passing within 0.1 m of an obstacle at the inside of an apex, and several of them crashed on the next race. A race that finishes clean once says nothing about a margin of 0.05 m. That is why the second half of the work was measuring walls, not speed.</p>
+  <p class="small"><a href="#ch3">Previous: how we got there</a> · <a href="#ch5">Next: how it was achieved</a></p>
+</section>
+
+<!-- ============================ 5 ============================ -->
+<section class="chapter" id="ch5" aria-labelledby="h-ch5">
+  <h2 id="h-ch5"><span class="cn">5</span>How it was achieved</h2>
+  <p>Eight pieces, each in the same order: what it is, the number it bought, the figure, the code, and what failed there. The code excerpts are quoted from the release commit and link to it.</p>
+  <p class="caveat">One machine (Linux, Proton), Windows untested; 20 clean races bound the crash rate only to about 1 in 7. <a href="#limits">Limits</a></p>
+
+  <h3 id="s5-1"><span class="cn">5.1</span>The racing line<a class="anchor" href="#s5-1" aria-label="Link to this section">#</a></h3>
+  <p>A minimum-curvature line, found by a quadratic program over offsets from the centreline, then widened corner by corner. The room it may use is bounded by what has been measured: first the space other cars have driven without contact, and at Lesmo 1 and the final hairpin the real walls (section 5.7). At the kink, the bottom curve and the first chicane the curvature cost also rises from the apex to the exit, so the line does its turning early and runs straighter where the car is on full power. That bought 0.45 s at the kink, 0.25 s at the bottom curve and 0.05 s at the chicane, per race.</p>
+  <p><strong>Where it came from.</strong> The line was first built from the line of the Summer 2026 first-place entry, and the corner widening used other cars' recorded paths as evidence of clear road. No code was copied. <a href="credits.html">Credits and licence</a> has the full disclosure.</p>
+  <!-- code:tools/mincurv_line.py:194-204 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/tools/mincurv_line.py#L194-L204" rel="noopener">tools/mincurv_line.py</a> at 17ee5c3, lines 194 to 204</div><pre tabindex="0"><code>def exit_ramp(ls, L, windows, alphas, apexes=None, blend=BLEND):
+    &quot;&quot;&quot;Per line_s curvature weight 1 + alpha_j * r: r rises linearly 0 -&gt; 1 from window j&#x27;s apex (default: its start)
+    to its end and stays 1 over the blend after it, so the QP does the window&#x27;s turning up to the apex and
+    straightens the exit, where the car is on full power.&quot;&quot;&quot;
+    kw = np.ones(len(ls))
+    for j, ((a, b), al) in enumerate(zip(windows, alphas)):
+        p = a if apexes is None or apexes[j] is None else apexes[j]
+        x = ((ls - a) % L - (p - a)) / (b - p)  # 0 at the apex, 1 at the window end
+        kw = np.where((ls - a) % L &lt;= b - a + blend, 1 + al * np.clip(x, 0, 1), kw)
+    return kw
+</code></pre></div>
+<!-- /code -->
+  <p><strong>What failed here.</strong> A free minimum-curvature line inside the waypoint polygon, and splicing other cars' paths into ours: see chapter 4.</p>
+
+  <h3 id="s5-2"><span class="cn">5.2</span>The speed plan<a class="anchor" href="#s5-2" aria-label="Link to this section">#</a></h3>
+  <p>TOPP-RA over the line, with a lateral grip limit per section of the track, a fitted drive-force limit, and braking that shares grip with cornering through a friction ellipse. The plan was never the limit: our plan for a flying lap was 103.53 s, 1.4 s faster than the other entry's real lap (104.90 s), while our car drove it in 109.30 s (experiment log, line 193). The lap time is lost where the car cannot follow the plan.</p>
+  <figure class="fig wide"><div class="chart" data-chart="plan" data-base="assets/data/"></div>
+    <figcaption>Figure 5.2. Planned and driven speed over one flying lap of the 318.40 s race; the shaded area is the gap. The car brakes where the plan does and runs below it while accelerating out of corners (mean gap 3.0 m/s, largest 9.9 m/s just after c1329). According to our experiment log the gap comes from the plan's inflated per-section grip settings, not from a model error.<br>Source: race log, tools/site_data.py; experiment log, line 299.</figcaption></figure>
+  <figure class="fig" style="max-width:560px">
+    <svg viewBox="0 0 380 250" role="img" aria-label="Friction ellipse: braking acceleration on the vertical axis, lateral acceleration on the horizontal axis. An ellipse is the grip limit; five short tangent lines at 15, 30, 45, 60 and 75 degrees approximate it for the plan." style="width:100%;height:auto">
+      <line x1="40" y1="120" x2="350" y2="120" stroke="#56606b"/><line x1="190" y1="20" x2="190" y2="230" stroke="#56606b"/>
+      <ellipse cx="190" cy="120" rx="130" ry="90" fill="#eef1f4" stroke="#1c2228" stroke-width="1.6"/>
+      <path d="M327.8 111.6 L303.3 175.0 M324.4 138.9 L280.8 191.1 M309.9 164.3 L254.0 203.0 M286.6 185.3 L223.4 210.6 M257.1 200.7 L190.2 213.1" stroke="#c41e2a" stroke-width="2" fill="none"/>
+      <text x="346" y="114" text-anchor="end" font-size="14" fill="#56606b">lateral grip</text>
+      <text x="198" y="30" font-size="14" fill="#56606b">braking</text>
+      <text x="196" y="244" font-size="13" fill="#c41e2a">tangent facets at 15 to 75 degrees</text>
+    </svg>
+    <figcaption>Figure 5.3. The friction ellipse the speed plan brakes inside: braking and cornering draw on the same grip, so the plan cannot ask for both at full strength. Five tangent lines keep it a set of linear constraints for the planner.<br>Source: tools/build_profile.py, the comment quoted below.</figcaption></figure>
+  <!-- code:tools/build_profile.py:36-42 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/tools/build_profile.py#L36-L42" rel="noopener">tools/build_profile.py</a> at 17ee5c3, lines 36 to 42</div><pre tabindex="0"><code>    # With brake_ellipse_c also braking shares grip: (a_long/A)^2 + (a_lat/(c a_lat(s)))^2 &lt;= 1 for a_long &lt; 0, as
+    # tangent lines at 15..75 deg (outer polygon, &lt;= 0.9 % loose). A = a_brk, or with brake_lines A(q) =
+    # a_brake_max(v(q)) at the previous pass&#x27;s speed (fixed point, a few passes from the box-only profile).
+    # Absent = box only.
+    c_el = veh.p.get(&quot;brake_ellipse_c&quot;)
+    if c_el is not None and c_el &lt; 1:  # the 75 deg facet would also cap pure lateral grip at ~1.035 c a_lat
+        raise ValueError(&quot;brake_ellipse_c must be &gt;= 1, got %r&quot; % c_el)</code></pre></div>
+<!-- /code -->
+  <p><strong>What failed here.</strong> A tyre-scrub model inside the plan, 341.20 s and 334.60 s against 333.90 s (experiment log, lines 199, 206).</p>
+
+  <h3 id="s5-3"><span class="cn">5.3</span>The controller: slip-aware MPC<a class="anchor" href="#s5-3" aria-label="Link to this section">#</a></h3>
+  <p>A linear time-varying MPC (OSQP, 60 steps, 3 s) on a dynamic bicycle model with saturating tyres and braking load transfer, fitted to race logs. It tracks the line's <em>course</em>, the direction the car is travelling, rather than its nose, limits tyre slip angles, and shrinks its braking limit as cornering load rises, so it brakes in a straight line and turns while easing off.</p>
+  <figure class="fig" style="max-width:560px">
+    <svg viewBox="0 0 380 250" role="img" aria-label="Frenet frame: a racing line curves up to the right; the car is a rotated rectangle beside it, with an arrow for the lateral error e_y, an angle for the heading error e_psi between the line direction and the car's direction, and the sideslip angle beta between the nose and the direction of travel." style="width:100%;height:auto">
+      <path d="M30 210 C130 210 230 180 340 50" stroke="#56606b" stroke-width="2" fill="none" stroke-dasharray="6 5"/>
+      <g transform="translate(205 170) rotate(-38)"><rect x="-34" y="-14" width="68" height="28" rx="4" fill="#1c2228"/><path d="M34 0 L58 0" stroke="#1c2228" stroke-width="2"/></g>
+      <path d="M205 170 L228 148" stroke="#c41e2a" stroke-width="2" fill="none"/>
+      <path d="M186 195 L205 170" stroke="#5b4bd0" stroke-width="2.5" fill="none"/><text x="140" y="186" font-size="14" fill="#5b4bd0">e_y</text>
+      <text x="236" y="146" font-size="14" fill="#c41e2a">direction of travel</text>
+      <text x="40" y="92" font-size="14" fill="#56606b">sideslip β: the nose against the direction of travel</text>
+      <text x="40" y="238" font-size="13" fill="#56606b">dashed: the racing line. e_ψ: its direction against the car's course.</text>
+    </svg>
+    <figcaption>Figure 5.4. The controller's frame. It keeps the lateral error e_y and the heading error e_ψ small, where the heading is the car's course, not its nose; the sideslip β is the difference between the two.</figcaption></figure>
+  <div class="keynum"><div class="big">12.3 s</div><p>The plan gap of the tyre MPC against 18.0 s for the controller before it; lateral error 0.117 m against 0.275 m rms; peak slip 13° against 17 to 19°.</p><p class="src">experiment log, line 204</p></div>
+  <p>The tyre MPC's first clean race at full plan speed took 334.95 s against the old controller's best of 333.90 s (line 204); it was slower at first, and cleaner. An earlier try at full speed had hit the chicane wall (line 202). The number that mattered came later, from one weight.</p>
+  <p><strong>The speed weight.</strong> With a speed weight (<code>q_v</code>) of 2 against tracking weights of 150 to 200, the MPC braked 3 to 9 m/s below its own plan to stay on the line. Raising it to 128 made it hold the planned speed through corners:</p>
+  <figure class="fig wide"><div class="chart" data-chart="qv" data-base="assets/data/"></div>
+    <figcaption>Figure 5.5. Race time against the MPC speed weight, one race per value. 128 was kept; 256 is within noise. The weight alone gained 1.75 s here; with the per-corner re-tune that followed, 2.3 s.<br>Source: experiment log, lines 275 to 276 (not published).</figcaption></figure>
+  <!-- code:competition_code/tyre_mpc.py:103-108 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/competition_code/tyre_mpc.py#L103-L108" rel="noopener">competition_code/tyre_mpc.py</a> at 17ee5c3, lines 103 to 108</div><pre tabindex="0"><code>        # stage cost q_ey e_y^2 + q_epsi (e_psi + beta)^2 + q_v (v - v_ref)^2 + q_beta beta^2: the COURSE error is
+        # what moves the car off the line; the nose sits at e_psi = -beta on a steady corner
+        W = np.zeros((NX, NX))
+        W[0, 0], W[2, 2] = cfg[&quot;q_ey&quot;], cfg[&quot;q_v&quot;]
+        W[1, 1] = W[1, 5] = W[5, 1] = cfg[&quot;q_epsi&quot;]
+        W[5, 5] = cfg[&quot;q_epsi&quot;] + cfg.get(&quot;q_beta&quot;, 0.0)</code></pre></div>
+<!-- /code -->
+  <p><strong>What failed here.</strong> A lower or higher lateral margin, a changed tracking weight, and a refit of the tyre model to the new driving all slowed the car or crashed it (chapter 4).</p>
+
+  <h3 id="s5-4"><span class="cn">5.4</span>The learned line offset<a class="anchor" href="#s5-4" aria-label="Link to this section">#</a></h3>
+  <p>Iterative learning over repeated laps: the car's measured lateral error at each metre of the lap is fed back into the reference, so the driven path lands on the intended line. On one early line successive rounds went 334.55, 334.40, 334.10 and 334.00 s (experiment log, line 196), and a later chain converged at 332.30 s (line 210). It is applied only inside windows where the line changed. A global round moved untouched corners off their proven paths, which is why it was rejected (line 263).</p>
+  <!-- code:tools/ilc.py:69-71 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/tools/ilc.py#L69-L71" rel="noopener">tools/ilc.py</a> at 17ee5c3, lines 69 to 71</div><pre tabindex="0"><code>def update(prev_d, err, ds, gamma=0.5, sigma=8.0, cap=2.5):
+    d = np.asarray(prev_d, float) - gamma * smooth_periodic(err, ds, sigma)
+    return smooth_periodic(np.clip(d, -cap, cap), ds, sigma / 2)</code></pre></div>
+<!-- /code -->
+
+  <h3 id="s5-5"><span class="cn">5.5</span>Per-corner tuning<a class="anchor" href="#s5-5" aria-label="Link to this section">#</a></h3>
+  <p>A closed throttle in a corner is engine braking on the driven wheels, about −13.4 m/s² at 50 m/s, and it unloads the rear in mid-corner. Holding a throttle floor through corners took the race from 331.80 s to 331.05 s, and a floor of 0.7 at sections 0, 4 and 7 to 329.55 s (experiment log, lines 228, 231). After that, a parallel optimiser (four simulators at once) tuned grip, braking and throttle floor per section: 329.60 s down to 326.70 s (lines 237 to 241).</p>
+  <p>A change is kept only if the car's body, all four corners from the logged heading, stays within the body positions of earlier clean races, or stays at least 0.10 m from the measured walls. Sliding harder through Lesmo was faster, swept the body 0.3 to 0.4 m further inside, and one such run hit the apex.</p>
+  <!-- code:competition_code/vehicle.py:98-104 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/competition_code/vehicle.py#L98-L104" rel="noopener">competition_code/vehicle.py</a> at 17ee5c3, lines 98 to 104</div><pre tabindex="0"><code>    def pedals_for(self, a_cmd, v, a_y=0.0, s_line=None):
+        &quot;&quot;&quot;(throttle, brake) for a longitudinal accel command at speed v. a_y: current lateral accel magnitude.
+        Option &quot;corner_throttle_floor&quot;: {&quot;thr&quot;: t, &quot;ay_min&quot;: a} - while cornering (a_y &gt; a) hold the throttle at
+        &gt;= t and take the extra deceleration from the brake pedal: a closed throttle is engine braking on the driven
+        wheels (-13 m/s^2 at 50 m/s here), which unloads the rear mid-corner; the pedal brakes all four wheels.
+        &quot;thr_sec&quot; (one value per a_lat section) overrides t per section when s_line is given.&quot;&quot;&quot;
+        cf = self.p.get(&quot;corner_throttle_floor&quot;)</code></pre></div>
+<!-- /code -->
+
+  <h3 id="s5-6"><span class="cn">5.6</span>Learned corrections<a class="anchor" href="#s5-6" aria-label="Link to this section">#</a></h3>
+  <p>Six small neural networks, one per section of the lap, add bounded corrections to the MPC's steering and acceleration: at most 0.03 rad and 4 m/s². They were trained with evolution strategies on continuous laps, each graded on its own section's time, crashes and near-misses, and at run time they are a few hundred numbers evaluated with numpy. Only the sections whose networks proved faster in full races are active: sections 1 (c1329) and 3 (the kink) output zero. The composite took the race from 326.75 s to 322.95 s (experiment log, line 257). Switching the active networks off one at a time showed that they all help:</p>
+  <ul><li>network 0 off: 319.60 s; network 2 off: 319.45 s; network 4 off: 319.35 s; network 5 off: 319.85 s, against 319.15 s with all four (line 294).</li></ul>
+  <!-- code:competition_code/submission.py:34-34 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/competition_code/submission.py#L34-L34" rel="noopener">competition_code/submission.py</a> at 17ee5c3, lines 34 to 34</div><pre tabindex="0"><code>RESIDUAL_SCALE = (0.03, 4.0)  # max |correction|: steer angle (rad), accel (m/s^2)</code></pre></div>
+<!-- /code -->
+  <p><strong>What failed here.</strong> The first policy was 1.40 s per lap faster on the flying laps it was trained on, and 2 of its 5 full races collided; training on full races instead produced candidates that crashed at an inside-apex obstacle (chapter 4).</p>
+
+  <h3 id="s5-7"><span class="cn">5.7</span>The wall map and the probes<a class="anchor" href="#s5-7" aria-label="Link to this section">#</a></h3>
+  <p>Ray casts sideways from the centreline every metre give a wall map, but the rays miss the lower part of some fences, by 0.1 to 0.25 m. So at every tight corner we measured the wall with the simulator's own collision mesh: the car is teleported through the exact poses of a recorded race, shifted toward the inside of the corner in 2 cm steps, until the first touch. Placed 0.3 m above the ground-projected road, with the sensor drained between poses, the probe reproduces the crashes of earlier runs at 0.00 to 0.10 m, which is how we know it measures what we think it measures.</p>
+  <figure class="fig" style="max-width:600px">
+    <svg viewBox="0 0 420 200" role="img" aria-label="Probe method: a wall on the right; the car pose is drawn at five positions shifted toward the wall in steps, the last one touching it; the distance from the first pose to the touching one is the clearance." style="width:100%;height:auto">
+      <rect x="352" y="10" width="14" height="170" fill="#1c2228"/>
+      <g fill="none" stroke="#56606b" stroke-width="1.4">
+        <rect x="40" y="76" width="70" height="34" rx="5"/><rect x="96" y="76" width="70" height="34" rx="5" stroke-dasharray="4 3"/>
+        <rect x="152" y="76" width="70" height="34" rx="5" stroke-dasharray="4 3"/><rect x="208" y="76" width="70" height="34" rx="5" stroke-dasharray="4 3"/></g>
+      <rect x="282" y="76" width="70" height="34" rx="5" fill="#c41e2a22" stroke="#c41e2a" stroke-width="1.8"/>
+      <path d="M110 140 L282 140" stroke="#1c2228" stroke-width="1.6" marker-end="url(#a)"/>
+      <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8z" fill="#1c2228"/></marker></defs>
+      <text x="196" y="132" text-anchor="middle" font-size="14" fill="#1c2228">shifted toward the wall</text>
+      <text x="196" y="166" text-anchor="middle" font-size="14" fill="#c41e2a">distance to the first touch = clearance</text>
+      <text x="318" y="64" text-anchor="middle" font-size="13" fill="#c41e2a">first touch</text><text x="75" y="64" text-anchor="middle" font-size="13" fill="#56606b">recorded pose</text>
+    </svg>
+    <figcaption>Figure 5.6. The static probe. It does not drive anything; it asks the simulator's collision mesh where the car would touch.</figcaption></figure>
+  <p>One of the obstacles was at the kink, on the left, at line distance 2695 to 2702 m. The ray map said 6.00 m; the probe found it at 5.87 to 5.96 m (experiment log, line 338). A bump of −0.25 m in the line there cost nothing, 318.40 s, and gave 0.30 m of clearance (line 340).</p>
+  <figure class="fig wide"><div class="chart" data-chart="probe" data-base="assets/data/"></div>
+    <figcaption>Figure 5.7. The closest touch of the car's own poses, from the static probe of the 318.40 s setup. Elsewhere the map is ray-cast only.<br>Source: README, "Result and safety evidence"; probe files logs/probe2/.</figcaption></figure>
+  <!-- code:tools/probe_obstacle.py:128-128 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/tools/probe_obstacle.py#L128-L128" rel="noopener">tools/probe_obstacle.py</a> at 17ee5c3, lines 128 to 128</div><pre tabindex="0"><code>    ap.add_argument(&quot;--z&quot;, type=float, default=0.3, help=&quot;placement height above the road, m: high enough that &quot;</code></pre></div>
+<!-- /code -->
+
+  <h3 id="s5-8"><span class="cn">5.8</span>The safety gate<a class="anchor" href="#s5-8" aria-label="Link to this section">#</a></h3>
+  <p>The gate (section 2.2) runs 20 races of the committed setup, scores each against the wall map, and passes only if every race finishes with no collision and the closest approach is at least 0.10 m. Its first attempt failed. The optimiser had used 0.10 m as a single-race threshold, which has no room for a spread of about ±0.02 m between races: the first gate finished 20 of 20 without a collision at a median of 318.30 s, but five races came within 0.10 m of the wall, all at c1329, and the closest was 0.076 m. That is a failure under the rule, and a few small shifts of the line at c1329 and Lesmo 1 later it passed: closest 0.130 m, median 0.164 m, none under 0.12 m (experiment log, lines 341 to 346).</p>
+  <figure class="fig" style="max-width:600px">
+    <svg viewBox="0 0 440 150" role="img" aria-label="Gate flow: 20 races on four slots, then status and collisions, then wall clearance per race, then a pass or fail rule." style="width:100%;height:auto">
+      <g fill="#fbfcfd" stroke="#56606b" stroke-width="1.2"><rect x="6" y="36" width="92" height="64" rx="3"/><rect x="118" y="36" width="92" height="64" rx="3"/><rect x="230" y="36" width="92" height="64" rx="3"/><rect x="342" y="36" width="92" height="64" rx="3" stroke="#c41e2a" stroke-width="1.8"/></g>
+      <g font-size="13" fill="#1c2228" text-anchor="middle"><text x="52" y="62">20 races</text><text x="52" y="80">4 slots</text><text x="164" y="62">status and</text><text x="164" y="80">collisions</text><text x="276" y="62">wall clearance</text><text x="276" y="80">per race</text><text x="388" y="62">pass: all clean,</text><text x="388" y="80">closest ≥ 0.10 m</text></g>
+      <g stroke="#1c2228" stroke-width="1.4" fill="none"><path d="M98 68 L118 68"/><path d="M210 68 L230 68"/><path d="M322 68 L342 68"/></g>
+      <text x="220" y="130" text-anchor="middle" font-size="12" fill="#56606b">checkouts verified byte-for-byte against the repository first</text>
+    </svg>
+    <figcaption>Figure 5.8. The release gate, tools/gate.py.</figcaption></figure>
+  <figure class="fig wide"><div class="chart" data-chart="clear" data-base="assets/data/"></div>
+    <figcaption>Figure 5.9. The closest wall approach of each of the 20 release-gate races, in 0.01 m bins. The red band is where the crashed cars in our tests touched (0.0 to 0.1 m).<br>Source: logs/gate_g2.csv; experiment log, lines 341 to 346.</figcaption></figure>
+  <!-- code:tools/gate.py:34-42 -->
+<div class="codeblock"><div class="hd"><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/17ee5c3/tools/gate.py#L34-L42" rel="noopener">tools/gate.py</a> at 17ee5c3, lines 34 to 42</div><pre tabindex="0"><code>def verdict(rows, wall_min, need_walls=True):
+    &quot;&quot;&quot;rows: dicts(status, coll, clearance). -&gt; (passed, summary text).&quot;&quot;&quot;
+    bad = [r for r in rows if r[&quot;status&quot;] != &quot;finished&quot; or int(r[&quot;coll&quot;]) != 0]
+    clr = [r[&quot;clearance&quot;] for r in rows if r[&quot;clearance&quot;] is not None and np.isfinite(r[&quot;clearance&quot;])]
+    worst = min(clr) if clr else float(&quot;nan&quot;)
+    missing = need_walls and len(clr) &lt; len(rows) - len(bad)
+    ok = not bad and not missing and (not need_walls or worst &gt;= wall_min)
+    return ok, &quot;%d/%d finished clean; closest wall approach %.2f m (need &gt;= %.2f)&quot; % (
+        len(rows) - len(bad), len(rows), worst, wall_min)</code></pre></div>
+<!-- /code -->
+  <p class="small"><a href="#ch4">Previous: what did not work</a> · <a href="#end">Next: if we started again</a></p>
+</section>
+
+<section class="chapter" id="end" aria-labelledby="h-end">
+  <h2 id="h-end">If we started again</h2>
+  <ol>
+    <li>Get the simulator running and reproducible, and build the parallel-slot evaluator first.</li>
+    <li>Get the telemetry of the best known entry, in a sandbox, as a benchmark and as a source of road that is proven clear.</li>
+    <li>Build a racing line, a speed plan and an MPC, and check the MPC's speed weight early.</li>
+    <li>Map the walls with ray casts and probe corrections before widening any line.</li>
+    <li>Tune per corner in parallel with a body and wall check, then gate the release.</li>
+  </ol>
+  <p><a href="credits.html">Credits and licence</a> · <a href="index.html">Back to the home page</a></p>
+</section>
+    </article>
+  </div>
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="cols">
+      <div><p class="fh">This site</p><ul><li><a href="index.html">Home</a></li><li><a href="book.html">Engineering Book</a></li><li><a href="credits.html">Credits and licence</a></li></ul></div>
+      <div><p class="fh">Repository</p><ul><li><a href="https://github.com/Rudra-roy/ROAR_Competition" rel="noopener">GitHub</a></li><li><a href="https://github.com/Rudra-roy/ROAR_Competition#readme" rel="noopener">README</a></li><li><a href="https://github.com/Rudra-roy/ROAR_Competition/blob/main/LICENSE" rel="noopener">LICENSE (MIT)</a></li></ul></div>
+      <div><p class="fh">Competition</p><ul><li><a href="https://roar.gitbook.io/roar-competition-documentation/" rel="noopener">ROAR documentation</a></li><li><a href="https://roar.berkeley.edu/monza-map/" rel="noopener">Monza map</a></li></ul></div>
+    </div>
+    <p class="fine">MIT licence. Simulator images are CARLA 0.9.12 renders of our own races. This site loads nothing from other servers.</p>
+  </div>
+</footer>
+<script src="assets/js/site.js" defer></script>
+<script src="assets/js/charts.js" defer></script>
+</body>
+</html>

@@ -12,6 +12,7 @@ import argparse
 import csv
 import math
 import os
+import queue
 import socket
 import threading
 import time
@@ -43,6 +44,10 @@ def main(argv=None):
     ap.add_argument("--every", type=float, default=0.5, help="simulated seconds between frames")
     ap.add_argument("--size", default="960x540")
     ap.add_argument("--views", default="chase,aerial")
+    ap.add_argument("--raw", action="store_true", help="write each view's frames as raw BGRA into one file <outdir>/<view>.bgra "
+                    "(a writer thread; no PNG encoding in the camera callback, which stalls the server at 1080p/20 fps). "
+                    "Encode with: ffmpeg -f rawvideo -pix_fmt bgra -video_size WxH -framerate F -i chase.bgra ...")
+    ap.add_argument("--window", help="T0:T1, save only frames whose simulated time is in [T0, T1] (s); the cameras still render all race")
     a = ap.parse_args(argv)
     w, h = a.size.split("x")
     os.makedirs(a.outdir, exist_ok=True)
@@ -59,6 +64,16 @@ def main(argv=None):
     client.set_timeout(120.0)
     world = client.get_world()
     car = wait_for_car(world)
+    win = tuple(float(x) for x in a.window.split(":")) if a.window else None
+    wq = queue.Queue(maxsize=300)  # raw frames waiting for the writer (8 MB each at 1080p)
+
+    def writer(view):
+        with open(os.path.join(a.outdir, view + ".bgra"), "wb") as fh:
+            while True:
+                b = wq.get()
+                if b is None:
+                    return
+                fh.write(b)
     lock, rows, sensors = threading.Lock(), [], []
     for name in a.views.split(","):
         x, z, pitch = VIEWS[name]
@@ -69,13 +84,23 @@ def main(argv=None):
 
         def save(img, name=name):
             t = img.timestamp
-            img.save_to_disk(os.path.join(a.outdir, "%s_%07.2f.png" % (name, t)))
+            if win and not win[0] <= t <= win[1]:
+                return
+            if a.raw:
+                wq.put(bytes(img.raw_data))
+            else:
+                img.save_to_disk(os.path.join(a.outdir, "%s_%07.2f.png" % (name, t)))
             tf, v = car.get_transform(), car.get_velocity()
             with lock:
                 rows.append((name, t, tf.location.x, tf.location.y, math.hypot(v.x, v.y)))
 
         cam.listen(save)
         sensors.append(cam)
+    wt = None
+    if a.raw:
+        assert "," not in a.views, "--raw writes one view; run one capture per view"
+        wt = threading.Thread(target=writer, args=(a.views,))
+        wt.start()
     print("capturing %s every %.2f s into %s" % (a.views, a.every, a.outdir), flush=True)
     try:
         while True:
@@ -90,6 +115,9 @@ def main(argv=None):
                 s.destroy()
             except RuntimeError:
                 pass
+        if wt:
+            wq.put(None)
+            wt.join()
         with lock, open(os.path.join(a.outdir, "frames.csv"), "w", newline="") as fh:
             wr = csv.writer(fh)
             wr.writerow(["view", "t", "x", "y", "speed"])
