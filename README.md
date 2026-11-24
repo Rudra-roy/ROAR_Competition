@@ -24,6 +24,9 @@ Measured on one machine (Ubuntu, Monza server under GE-Proton 9) with the unmodi
 ruled out. The wall distance comes from a map that is ray-cast except at the probed corners
 ([evidence](#result-and-safety-evidence)).
 
+Project site, with the race replays, statistics and the Engineering Book (how the entry was built, including what did
+not work): [rudra-roy.github.io/ROAR_Competition](https://rudra-roy.github.io/ROAR_Competition/).
+
 Competition documentation: [roar.gitbook.io](https://roar.gitbook.io/roar-competition-documentation/). Short run
 notes for the organizers: [instruction.txt](instruction.txt).
 
