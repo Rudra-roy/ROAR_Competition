@@ -11,7 +11,7 @@ The GIFs are encoded with ffmpeg from frames (docs/img/):
   lap_replay.gif   python tools/make_media.py RUN.csv OUT --only replay --printed 318.40, then
                    ffmpeg -framerate 12 -i OUT/replay_frames/f_%04d.png -vf "split[a][b];[a]palettegen=max_colors=48:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 lap_replay.gif
   sim_timelapse.gif  every 4th chase frame of tools/capture.py --every 0.5 (one per 2 s of simulated time), numbered
-                   h_0000.png ..., then ffmpeg -framerate 12 -i h_%04d.png -vf "scale=400:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 sim_timelapse.gif
+                   h_0000.png ..., then ffmpeg -framerate 12 -i h_%04d.png -vf "scale=480:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" -loop 0 sim_timelapse.gif
   (dithering makes photographic frames about 3x larger: 17 MB at 640 px / 128 colours / bayer dither.)
 Stills: tools/pick_stills.py names the frames; convert FRAME.png -strip -colors 256 PNG8:OUT.png.
 """

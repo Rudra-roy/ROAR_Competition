@@ -10,7 +10,7 @@ small learned corrections ride on top.
 ![Tests: 164 passed, run locally](https://img.shields.io/badge/tests-164%20passed%20%28local%29-3a4048?style=flat-square)
 ![Status: Fall 2026 entry](https://img.shields.io/badge/status-Fall%202026%20entry-3a4048?style=flat-square)
 
-<img src="docs/img/sim_timelapse.gif" width="400" alt="Chase-camera timelapse of the Tesla Model 3 driving three laps of Monza in CARLA, rendered by the simulator during one race of this entry.">
+<img src="docs/img/sim_timelapse.gif" width="480" alt="Chase-camera timelapse of the Tesla Model 3 driving three laps of Monza in CARLA, rendered by the simulator during one race of this entry.">
 
 <sub>Chase camera, rendered by CARLA during one race of this commit (318.40 s, 0 collisions). One frame per 2 s of
 simulated time.</sub>
@@ -99,7 +99,7 @@ Expected: `Solution finished in 318.3... seconds` or `318.4...` (318.30 to 318.4
 
 ## Run on Linux (our setup, GE-Proton 9)
 
-Tested on Ubuntu 22.04, NVIDIA RTX 5060 Ti / RTX 4070 SUPER, X11. Monza ships as a Windows CARLA 0.9.12 build, so the
+Tested on Ubuntu 22.04, NVIDIA RTX 5060 Ti, X11. Monza ships as a Windows CARLA 0.9.12 build, so the
 server runs under GE-Proton 9; the Python client runs natively in a Python 3.8 venv. You need a Vulkan GPU driver
 (`vulkaninfo --summary`), git, curl, [uv](https://astral.sh/uv), about 10 GB of disk and about 3 GB of free RAM per
 running server. No sudo or Steam.
@@ -372,6 +372,7 @@ labelled in the figure is the MPC's speed weight (`mpc.q_v` 2 to 128, see
 - `tools/capture.py`, `tools/make_media.py`, `tools/media_data.py`, `tools/pick_stills.py` draw the images below
   `docs/img/` from one logged race (camera frames recorded beside a race; telemetry from its `run.csv`).
 - `docs/img/` the README's images and animations.
+- `LICENSE` MIT.
 - `tests/` unit tests: `PYTHONPATH= python -m pytest tests/ -q` (about 5 minutes; needs `requirements-dev.txt`).
 
 ## Limits
@@ -384,6 +385,11 @@ labelled in the figure is the MPC's speed weight (`mpc.q_v` 2 to 128, see
   speed does not change the score.
 - The tests badge is static: `PYTHONPATH= python -m pytest tests/ -q` (164 tests, about 5 minutes, needs
   `requirements-dev.txt`).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). It covers our code and data. `competition_runner.py` and `infrastructure.py` are the
+ROAR team's unmodified starter files, and the repositories named in Credits carry no licence of their own.
 
 ## Credits
 
