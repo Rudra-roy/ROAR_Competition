@@ -6,7 +6,7 @@
 hero: a raw BGRA file written by `tools/capture.py --raw --window T0:T1 --size 1920x1080 --every 0.05` (real time at 20
   frames/s) -> hero.mp4 (H.264, no audio) and hero-poster.jpg. The loop is seamless: the clip's last second is crossfaded
   into its first, so the video can simply `loop`. One file only: VP9 came out larger than H.264 at the same quality.
-stills: the frames tools/pick_stills.py picks for each named corner (second lap) -> still-<corner>.jpg.
+stills: the frames tools/pick_stills.py picks for the corners the book shows (second lap) -> still-<corner>.jpg.
 """
 import argparse
 import os
@@ -15,6 +15,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "assets", "media")
+USED = ("first_chicane", "lesmo1", "final_hairpin")  # the corners the Engineering Book shows
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 
@@ -40,6 +41,8 @@ def hero(raw, fps, size, crf):
 def stills(capdir):
     from pick_stills import pick
     for name, (frame, t, v, ds, n) in pick(capdir, "chase", 2).items():
+        if name not in USED:
+            continue
         out = os.path.join(OUT, "still-%s.jpg" % name.replace("_", "-"))
         subprocess.run(["convert", os.path.join(capdir, frame), "-strip", "-quality", "80", out], check=True)
         print("%s <- %s (t=%.1f s, %.1f m/s)" % (os.path.basename(out), frame, t, v))

@@ -34,7 +34,7 @@ VERSIONS = [
     ("v4", 319.15, "4683eb1", "logs/ref_ship/gb2.run.csv", "corner exits and a re-tune", 5),
     ("v5", 318.40, "d6f964a", "logs/capture/cap3.run.csv", "real-wall corridor map", 20),
 ]
-# From the experiment log (.superpowers/sdd/2026-11-03-hybrid-mpc-toppra/progress.md, line numbers as of 2026-11-24).
+# From the experiment log kept while building the entry (a local file, not published; line numbers as of 2026-11-24).
 LEDGER = {
     "starter_s": 1658.90,  # results.csv row "baseline", ledger L26
     "winner_s": 319.75,  # the Summer 2026 first-place entry's code, run in our simulator (L221, README)
